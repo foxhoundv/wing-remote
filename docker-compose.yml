@@ -18,27 +18,25 @@ services:
     restart: unless-stopped
 
     # ── Network ──────────────────────────────────────────────────────────────
-    # host mode gives direct UDP access for OSC — no NAT issues.
-    # NOTE: Wing OSC port is ALWAYS 2223. LOCAL_OSC_PORT (default 2224) is
-    # the port this container listens on for Wing subscription push events.
+    # host mode gives the container direct UDP access for OSC (no NAT issues)
+    # and also makes /dev/snd devices visible without a devices: block.
+    # Wing OSC port is always 2223. LOCAL_OSC_PORT (default 2224) is the port
+    # this container listens on for Wing subscription push events.
     network_mode: host
 
-    # ── Audio device passthrough ─────────────────────────────────────────────
-    # Managed automatically by the in-app Setup Wizard.
-    # The wizard detects /dev/snd, enables these lines, and restarts the
-    # container for you. You can also enable them manually here.
-    #
-    # To check if your host has audio devices:  ls /dev/snd
-    #
-    # devices:
-    #   - /dev/snd:/dev/snd
+    # ── Audio device access ───────────────────────────────────────────────────
+    # privileged: true lets the entrypoint script detect /dev/snd at runtime
+    # and add the container user to the audio group if devices are present.
+    # This is safe here because the Docker socket is already mounted (which
+    # grants equivalent host access). Remove if you don't need audio recording.
+    privileged: true
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     volumes:
       - recordings:/recordings       # WAV recording storage (Docker-managed)
       - snapshots:/snapshots         # Scene/snapshot files  (Docker-managed)
       - ./.env:/app/.env             # Setup Wizard writes Wing IP, ports, etc.
-      - ./docker-compose.yml:/app/docker-compose.yml  # Wizard patches audio passthrough
+      - ./docker-compose.yml:/app/docker-compose.yml  # Readable by Setup Wizard
       - /var/run/docker.sock:/var/run/docker.sock      # Enables auto-restart from UI
 
     # ── Environment ──────────────────────────────────────────────────────────

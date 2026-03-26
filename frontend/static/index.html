@@ -2043,10 +2043,10 @@ setTimeout(() => {
               <span class="wiz-toggle-badge" id="snd-badge">—</span>
             </div>
             <div class="wiz-toggle-desc">
-              Passes the host's ALSA audio devices into the container so the Wing's USB
-              audio can be recorded. Edits <code>docker-compose.yml</code> and restarts
-              the container. <b style="color:var(--text-primary)">You can enable this now
-              even if the Wing isn't plugged in yet</b> — it will be ready when you connect.
+              Enables Wing USB audio recording. The container automatically detects
+              <code>/dev/snd</code> at startup — <b style="color:var(--text-primary)">no
+              manual config file edits required.</b> Enable this now, connect the Wing
+              USB cable, then restart the container whenever you're ready.
             </div>
           </div>
         </div>
@@ -2060,14 +2060,15 @@ setTimeout(() => {
         </div>
 
         <div id="no-snd-warning" style="display:none;background:rgba(245,166,35,.08);border:1px solid #a07010;border-radius:3px;padding:10px 14px;font-size:11px;color:var(--amber);line-height:1.6;">
-          ⚠ <b>/dev/snd not detected yet</b> — this is normal if the Wing USB cable isn't connected.<br><br>
-          <b style="color:var(--text-primary)">You can still enable passthrough now.</b> The setting will be
-          written to <code>docker-compose.yml</code> and activated on next container start. Once you connect
-          the Wing via USB and restart the container, audio devices will appear here.<br><br>
+          ⚠ <b>/dev/snd not detected yet</b> — this is normal if the Wing USB cable isn't plugged in.<br><br>
+          <b style="color:var(--text-primary)">You can enable recording now anyway.</b>
+          The container uses <code>privileged: true</code> and auto-detects <code>/dev/snd</code>
+          each time it starts — no docker-compose.yml edits needed. Just connect the Wing via USB
+          and run <code>docker compose restart wing-remote</code>.<br><br>
           Common reasons /dev/snd is absent:<br>
-          • Wing USB cable not yet connected to this machine<br>
+          • Wing USB cable not yet connected<br>
           • Running on WSL1 (use WSL2 + usbipd) or macOS Docker Desktop<br>
-          • ALSA drivers not loaded — try: <code>sudo modprobe snd-usb-audio</code>
+          • ALSA drivers not loaded: <code>sudo modprobe snd-usb-audio</code>
         </div>
       </div>
 
@@ -2112,9 +2113,9 @@ setTimeout(() => {
         <div class="wiz-log" id="applyLog">Waiting to apply…</div>
 
         <div class="restart-notice" id="restartNotice">
-          <b>🔄 Container Restart Required</b><br>
-          Audio device passthrough was changed. The container needs to restart
-          to apply the new docker-compose.yml settings.<br><br>
+          <b>🔌 Connect Wing USB &amp; Restart</b><br>
+          Audio detection is automatic — the container checks for <code>/dev/snd</code>
+          every time it starts. Connect the Wing USB cable to this machine, then restart:<br><br>
           <button class="wiz-test-btn" onclick="triggerRestart()" id="restartBtn">
             ⟳ Restart Container Now
           </button>

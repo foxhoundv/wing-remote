@@ -930,16 +930,19 @@ async def stop_recording() -> dict:
 
 @app.get("/api/status")
 async def get_status():
+    import os as _os
     return {
-        "connected":       app_state.wing_client is not None,
-        "wing_connected":  app_state.wing_connected,
-        "recording":       app_state.recording,
-        "ws_clients":      len(app_state.ws_clients),
-        "wing_ip":         WING_IP,
-        "wing_port":       WING_OSC_PORT,
-        "local_port":      LOCAL_OSC_PORT,
-        "sample_rate":     SAMPLE_RATE,
-        "bit_depth":       BIT_DEPTH,
+        "connected":        app_state.wing_client is not None,
+        "wing_connected":   app_state.wing_connected,
+        "recording":        app_state.recording,
+        "ws_clients":       len(app_state.ws_clients),
+        "wing_ip":          WING_IP,
+        "wing_port":        WING_OSC_PORT,
+        "local_port":       LOCAL_OSC_PORT,
+        "sample_rate":      SAMPLE_RATE,
+        "bit_depth":        BIT_DEPTH,
+        "audio_available":  _os.getenv("AUDIO_AVAILABLE", "0") == "1",
+        "dev_snd_present":  Path("/dev/snd").exists() and bool(list(Path("/dev/snd").iterdir())) if Path("/dev/snd").exists() else False,
     }
 
 

@@ -182,14 +182,10 @@ def _read_env() -> dict:
 
 
 def _compose_audio_enabled() -> bool:
-    """Returns True if the /dev/snd passthrough is currently uncommented."""
-    if not COMPOSE_FILE.exists():
-        return False
+    """Returns True if audio passthrough is enabled (AUDIO_AVAILABLE=1 in .env)."""
     try:
-        for line in COMPOSE_FILE.read_text().splitlines():
-            if line.rstrip() == "      - /dev/snd:/dev/snd":
-                return True
-        return False
+        env = _read_env()
+        return env.get("AUDIO_AVAILABLE", "0") == "1"
     except Exception:
         return False
 
@@ -375,73 +371,39 @@ def apply_env_config(config: dict) -> dict:
 
 def apply_audio_passthrough(enable: bool) -> dict:
     """
-    Toggle the /dev/snd audio passthrough lines in docker-compose.yml.
+    Configure audio passthrough preference.
 
-    Uses exact line-by-line matching rather than regex to avoid any risk
-    of corrupting YAML indentation or accidentally matching other keys.
+    Audio device access is now handled at runtime by entrypoint.sh using
+    privileged mode — the container detects /dev/snd at startup automatically.
+    This function records the user's preference in .env (AUDIO_AVAILABLE) and
+    returns restart_required=False since no docker-compose.yml change is needed.
 
-    The docker-compose.yml file contains exactly these two sentinel lines
-    in the audio passthrough section (commented out by default):
-        # devices:
-        #   - /dev/snd:/dev/snd
-
-    When enabled they become:
-        devices:
-          - /dev/snd:/dev/snd
+    The old approach of commenting/uncommenting a devices: block in
+    docker-compose.yml caused "no such file or directory" errors on hosts where
+    /dev/snd doesn't exist at compose-up time. privileged: true avoids this.
     """
-    if not COMPOSE_FILE.exists():
-        return {"success": False, "message": "docker-compose.yml not found at /app/docker-compose.yml"}
-
-    # These are the exact commented forms as they appear in the file.
-    # We use 4-space indentation to match the service-level indentation.
-    COMMENTED = [
-        "    # devices:",
-        "    #   - /dev/snd:/dev/snd",
-    ]
-    UNCOMMENTED = [
-        "    devices:",
-        "      - /dev/snd:/dev/snd",
-    ]
-
     try:
-        lines    = COMPOSE_FILE.read_text().splitlines(keepends=True)
-        original = "".join(lines)
-        new_lines = []
-        changed   = False
-
-        for line in lines:
-            # Strip trailing newline for comparison, preserve it for output
-            stripped = line.rstrip("\n").rstrip("\r")
-
-            if enable:
-                # Commented → uncommented
-                if stripped in COMMENTED:
-                    idx = COMMENTED.index(stripped)
-                    new_lines.append(UNCOMMENTED[idx] + "\n")
-                    changed = True
-                    continue
-            else:
-                # Uncommented → commented
-                if stripped in UNCOMMENTED:
-                    idx = UNCOMMENTED.index(stripped)
-                    new_lines.append(COMMENTED[idx] + "\n")
-                    changed = True
-                    continue
-
-            new_lines.append(line)
-
-        if changed:
-            # Write backup before modifying
-            shutil.copy(COMPOSE_FILE, COMPOSE_FILE.with_suffix(".yml.bak"))
-            COMPOSE_FILE.write_text("".join(new_lines))
-            log.info(f"docker-compose.yml audio passthrough → {'enabled' if enable else 'disabled'}")
-        else:
-            log.info(f"docker-compose.yml audio passthrough already {'enabled' if enable else 'disabled'} — no change")
-
-        return {"success": True, "changed": changed, "enabled": enable, "restart_required": changed}
-
+        # Write preference to .env so the app knows intent
+        env_lines = ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else []
+        new_lines = [l for l in env_lines if not l.startswith("AUDIO_AVAILABLE=")]
+        new_lines.append(f"AUDIO_AVAILABLE={'1' if enable else '0'}")
+        ENV_FILE.write_text("\n".join(new_lines) + "\n")
+        log.info(f"Audio passthrough preference set to: {enable}")
+        return {
+            "success": True,
+            "changed": True,
+            "enabled": enable,
+            # No restart needed — entrypoint.sh detects /dev/snd at runtime
+            "restart_required": False,
+            "message": (
+                "Audio passthrough is now handled automatically at container startup. "
+                "Connect the Wing USB cable and run: docker compose restart wing-remote"
+                if enable else
+                "Audio recording disabled."
+            ),
+        }
     except Exception as e:
-        log.error(f"Failed to patch docker-compose.yml: {e}")
+        log.error(f"Failed to set audio passthrough preference: {e}")
         return {"success": False, "message": str(e)}
 
 
