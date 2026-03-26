@@ -1,0 +1,82 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# WING Remote — docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   docker compose up --build          # first run
+#   docker compose up -d               # detached / background
+#   docker compose logs -f wing-remote # follow logs
+#   docker compose down                # stop and remove containers
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  wing-remote:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wing-remote
+    restart: unless-stopped
+
+    # ── Network ──────────────────────────────────────────────────────────────
+    # host mode gives direct UDP access for OSC — no NAT issues.
+    # NOTE: Wing OSC port is ALWAYS 2223. LOCAL_OSC_PORT (default 2224) is
+    # the port this container listens on for Wing subscription push events.
+    network_mode: host
+
+    # ── Audio device passthrough ─────────────────────────────────────────────
+    # Managed automatically by the in-app Setup Wizard.
+    # The wizard detects /dev/snd, enables these lines, and restarts the
+    # container for you. You can also enable them manually here.
+    #
+    # To check if your host has audio devices:  ls /dev/snd
+    #
+    # devices:
+    #   - /dev/snd:/dev/snd
+
+    # ── Volumes ──────────────────────────────────────────────────────────────
+    volumes:
+      - recordings:/recordings       # WAV recording storage (Docker-managed)
+      - snapshots:/snapshots         # Scene/snapshot files  (Docker-managed)
+      - ./.env:/app/.env             # Setup Wizard writes Wing IP, ports, etc.
+      - ./docker-compose.yml:/app/docker-compose.yml  # Wizard patches audio passthrough
+      - /var/run/docker.sock:/var/run/docker.sock      # Enables auto-restart from UI
+
+    # ── Environment ──────────────────────────────────────────────────────────
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+
+    # ── Resource limits ───────────────────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+    # ── Health ────────────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/status')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  recordings:
+    driver: local
+  snapshots:
+    driver: local

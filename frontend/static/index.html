@@ -1,0 +1,2486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WING Remote</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;500;600;700&family=Barlow:wght@300;400;500&display=swap');
+
+  :root {
+    --bg-deep:     #0e0f11;
+    --bg-panel:    #141518;
+    --bg-surface:  #1a1c20;
+    --bg-raised:   #22252b;
+    --border:      #2a2d34;
+    --border-hi:   #3a3d45;
+    --orange:      #e8820a;
+    --orange-dim:  #a85c06;
+    --orange-glow: rgba(232,130,10,0.25);
+    --amber:       #f5a623;
+    --green:       #3ddc84;
+    --green-dim:   #1e6e42;
+    --red:         #e84040;
+    --red-dim:     #7a1e1e;
+    --blue:        #4a9eff;
+    --cyan:        #00d4d4;
+    --text-primary:#e8eaf0;
+    --text-dim:    #8a8e9a;
+    --text-muted:  #4a4e5a;
+    --fader-track: #0a0b0d;
+    --meter-bg:    #0c0e10;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Barlow Condensed', sans-serif;
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: auto;
+    user-select: none;
+  }
+
+  /* ── TOP BAR ── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    padding: 0 16px;
+    height: 44px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .topbar-logo {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: 4px;
+    color: var(--orange);
+    text-transform: uppercase;
+  }
+  .topbar-logo span { color: var(--text-dim); font-weight: 300; }
+  .topbar-status {
+    display: flex; align-items: center; gap: 20px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+  }
+  .status-pill {
+    display: flex; align-items: center; gap-6px; gap: 6px;
+    padding: 3px 10px;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+  }
+  .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .status-dot.offline { background: var(--red); box-shadow: 0 0 6px var(--red); animation: none; }
+  .topbar-nav { display: flex; gap: 2px; }
+  .nav-btn {
+    padding: 6px 14px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 12px; font-weight: 600; letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: transparent; color: var(--text-dim);
+    border: 1px solid transparent;
+    cursor: pointer; transition: all .15s;
+  }
+  .nav-btn:hover { color: var(--text-primary); border-color: var(--border); }
+  .nav-btn.active {
+    background: var(--bg-raised); color: var(--orange);
+    border-color: var(--orange-dim);
+    box-shadow: 0 0 12px var(--orange-glow);
+  }
+
+  /* ── MAIN LAYOUT ── */
+  .main { display: flex; height: calc(100vh - 44px); }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: 200px; min-width: 200px;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow-y: auto;
+  }
+  .sidebar-section { border-bottom: 1px solid var(--border); }
+  .sidebar-label {
+    padding: 8px 12px 4px;
+    font-size: 9px; font-weight: 700; letter-spacing: 2px;
+    color: var(--text-muted); text-transform: uppercase;
+  }
+  .sidebar-item {
+    padding: 7px 12px;
+    font-size: 13px; font-weight: 500;
+    color: var(--text-dim);
+    cursor: pointer; display: flex; align-items: center; gap: 8px;
+    transition: all .1s;
+    border-left: 2px solid transparent;
+  }
+  .sidebar-item:hover { background: var(--bg-surface); color: var(--text-primary); }
+  .sidebar-item.active {
+    background: var(--bg-raised); color: var(--orange);
+    border-left-color: var(--orange);
+  }
+  .sidebar-item .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+
+  /* ── MIXER AREA ── */
+  .mixer-area {
+    flex: 1; display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── CHANNEL STRIPS CONTAINER ── */
+  .strips-wrapper {
+    flex: 1; overflow-x: auto; overflow-y: hidden;
+    display: flex; flex-direction: column;
+  }
+  .strips-scroll {
+    display: flex; height: 100%; gap: 1px;
+    padding: 8px 8px 0;
+    background: var(--bg-deep);
+  }
+
+  /* ── CHANNEL STRIP ── */
+  .channel-strip {
+    width: 68px; min-width: 68px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 3px 3px 0 0;
+    display: flex; flex-direction: column;
+    align-items: center;
+    transition: border-color .1s;
+    position: relative;
+  }
+  .channel-strip:hover { border-color: var(--border-hi); }
+  .channel-strip.selected { border-color: var(--orange); box-shadow: 0 0 10px var(--orange-glow); }
+  .channel-strip.muted { opacity: 0.5; }
+
+  .ch-color-bar {
+    width: 100%; height: 4px; border-radius: 3px 3px 0 0;
+  }
+  .ch-number {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px; color: var(--text-muted);
+    padding: 4px 0 2px; letter-spacing: 1px;
+  }
+  .ch-name-box {
+    width: calc(100% - 8px);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 2px 4px;
+    font-size: 11px; font-weight: 600; letter-spacing: .5px;
+    text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer;
+    margin-bottom: 6px;
+  }
+  .ch-name-box:hover { border-color: var(--orange-dim); color: var(--orange); }
+
+  /* Meter */
+  .meter-wrap {
+    display: flex; gap: 2px;
+    height: 120px; align-items: flex-end;
+    padding: 0 4px; margin-bottom: 4px;
+  }
+  .meter-bar {
+    width: 10px;
+    background: var(--meter-bg);
+    border-radius: 1px;
+    overflow: hidden;
+    position: relative;
+    height: 100%;
+    display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .meter-fill {
+    width: 100%;
+    border-radius: 1px;
+    transition: height .05s linear;
+    background: linear-gradient(to top, var(--green) 0%, var(--green) 70%, var(--amber) 85%, var(--red) 100%);
+  }
+  .meter-clip {
+    position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--red); opacity: 0; transition: opacity .1s;
+  }
+  .meter-clip.active { opacity: 1; box-shadow: 0 0 6px var(--red); }
+
+  /* EQ thumbnail */
+  .eq-thumb {
+    width: calc(100% - 8px);
+    height: 32px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    margin-bottom: 4px;
+    overflow: hidden; position: relative; cursor: pointer;
+  }
+  .eq-thumb:hover { border-color: var(--cyan); }
+  .eq-thumb canvas { width: 100%; height: 100%; }
+
+  /* Pan knob */
+  .pan-section { display: flex; flex-direction: column; align-items: center; margin-bottom: 4px; }
+  .pan-label { font-size: 8px; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 2px; text-transform: uppercase; }
+  .knob {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #3a3d45, #1a1c20);
+    border: 1px solid var(--border-hi);
+    position: relative; cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .knob::after {
+    content: '';
+    position: absolute; top: 3px; left: 50%; transform: translateX(-50%);
+    width: 2px; height: 8px;
+    background: var(--orange);
+    border-radius: 1px;
+    transform-origin: bottom center;
+  }
+  .knob:hover { border-color: var(--orange-dim); }
+
+  /* Buttons row */
+  .ch-buttons { display: flex; gap: 3px; margin-bottom: 6px; }
+  .ch-btn {
+    flex: 1;
+    height: 18px;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    font-size: 8px; font-weight: 700; letter-spacing: .5px;
+    color: var(--text-muted); cursor: pointer;
+    transition: all .1s; text-transform: uppercase;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ch-btn:hover { color: var(--text-primary); border-color: var(--border-hi); }
+  .ch-btn.mute-btn.active { background: var(--red-dim); color: #ff8080; border-color: var(--red); }
+  .ch-btn.solo-btn.active { background: #4a3800; color: var(--amber); border-color: var(--amber); }
+  .ch-btn.rec-btn.active { background: var(--red-dim); color: var(--red); border-color: var(--red); animation: blink .8s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+  /* Fader */
+  .fader-section {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    padding: 0 0 8px; position: relative; min-height: 120px;
+  }
+  .fader-track {
+    width: 6px;
+    flex: 1;
+    background: var(--fader-track);
+    border-radius: 3px;
+    position: relative;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    min-height: 80px;
+  }
+  .fader-0db {
+    position: absolute; left: -5px; right: -5px;
+    height: 1px; background: var(--orange-dim);
+    top: 25%; /* ~0dB position */
+    pointer-events: none;
+  }
+  .fader-fill {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(to top, var(--orange-dim), var(--orange));
+    border-radius: 0 0 3px 3px;
+    transition: height .05s;
+  }
+  .fader-handle {
+    position: absolute; left: 50%;
+    transform: translate(-50%, 50%);
+    width: 36px; height: 14px;
+    background: linear-gradient(180deg, #4a4e5a 0%, #2a2d34 50%, #1e2128 100%);
+    border: 1px solid var(--border-hi);
+    border-radius: 2px;
+    cursor: grab;
+    box-shadow: 0 2px 6px rgba(0,0,0,.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2;
+  }
+  .fader-handle::after {
+    content: '';
+    width: 20px; height: 1px;
+    background: var(--border-hi);
+    box-shadow: 0 -2px 0 var(--border-hi), 0 2px 0 var(--border-hi);
+  }
+  .fader-handle:active { cursor: grabbing; background: linear-gradient(180deg, #5a5e6a 0%, #3a3d44 50%, #2e3138 100%); }
+  .fader-db {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px; color: var(--text-dim);
+    margin-top: 4px; letter-spacing: .5px;
+  }
+
+  /* Master/Bus strip differences */
+  .channel-strip.master { width: 80px; min-width: 80px; border-color: var(--orange-dim); }
+  .channel-strip.master .ch-color-bar { background: var(--orange) !important; }
+  .channel-strip.bus { border-color: #2a3a4a; }
+
+  /* ── MASTER BUS SECTION ── */
+  .master-section {
+    display: flex; gap: 1px; padding: 8px;
+    background: var(--bg-deep);
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── DETAIL PANEL ── */
+  .detail-panel {
+    width: 320px; min-width: 320px;
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow-y: auto;
+  }
+  .detail-header {
+    padding: 10px 14px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .detail-title {
+    font-size: 14px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .detail-ch-badge {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px; color: var(--orange);
+    background: var(--bg-raised);
+    border: 1px solid var(--orange-dim);
+    padding: 2px 8px; border-radius: 2px;
+  }
+
+  .detail-section {
+    border-bottom: 1px solid var(--border);
+    padding: 10px 14px;
+  }
+  .detail-section-label {
+    font-size: 9px; font-weight: 700; letter-spacing: 2px;
+    color: var(--text-muted); text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  /* EQ Graph */
+  .eq-graph-wrap {
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden; position: relative;
+  }
+  .eq-graph-wrap canvas { display: block; width: 100%; }
+  .eq-freq-labels {
+    display: flex; justify-content: space-between;
+    padding: 2px 4px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 8px; color: var(--text-muted);
+  }
+
+  /* EQ band knobs */
+  .eq-bands {
+    display: grid; grid-template-columns: repeat(4,1fr);
+    gap: 8px; margin-top: 8px;
+  }
+  .eq-band { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .eq-band-name { font-size: 9px; letter-spacing: 1px; color: var(--text-muted); text-transform: uppercase; }
+  .eq-band-val { font-family: 'Share Tech Mono', monospace; font-size: 9px; color: var(--cyan); }
+
+  /* Dynamics */
+  .dynamics-graph {
+    background: var(--bg-deep);
+    border: 1px solid var(--border); border-radius: 3px;
+    height: 80px; position: relative; overflow: hidden; margin-bottom: 8px;
+  }
+  .dynamics-graph canvas { width: 100%; height: 100%; }
+
+  /* Param grid */
+  .param-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .param-item {
+    background: var(--bg-surface);
+    border: 1px solid var(--border); border-radius: 2px;
+    padding: 6px 8px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .param-item-label { font-size: 9px; letter-spacing: 1px; color: var(--text-muted); text-transform: uppercase; }
+  .param-item-val {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px; color: var(--text-primary);
+  }
+  .param-slider {
+    width: 100%; height: 3px; margin-top: 4px;
+    -webkit-appearance: none; appearance: none;
+    background: var(--border); border-radius: 2px; cursor: pointer; outline: none;
+  }
+  .param-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--orange);
+    box-shadow: 0 0 4px var(--orange-glow);
+  }
+
+  /* ── RECORDING PANEL ── */
+  .rec-panel {
+    background: var(--bg-panel);
+    border-top: 2px solid var(--border);
+    padding: 10px 14px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .rec-controls { display: flex; gap: 6px; align-items: center; }
+  .rec-control-btn {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-hi);
+    background: var(--bg-raised); cursor: pointer;
+    font-size: 13px; transition: all .15s;
+    color: var(--text-dim);
+  }
+  .rec-control-btn:hover { border-color: var(--orange-dim); color: var(--orange); }
+  .rec-control-btn.rec-armed {
+    background: var(--red-dim); color: var(--red);
+    border-color: var(--red);
+    box-shadow: 0 0 10px rgba(232,64,64,0.3);
+    animation: blink .8s infinite;
+  }
+  .rec-control-btn.playing {
+    background: #0a3a1a; color: var(--green);
+    border-color: var(--green);
+  }
+  .rec-time {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 22px; letter-spacing: 3px;
+    color: var(--text-primary);
+    background: var(--bg-deep); padding: 4px 12px;
+    border-radius: 3px; border: 1px solid var(--border);
+    min-width: 120px; text-align: center;
+  }
+  .rec-time.recording { color: var(--red); text-shadow: 0 0 10px rgba(232,64,64,.4); }
+  .rec-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .rec-info-row { display: flex; gap: 16px; }
+  .rec-badge {
+    font-size: 10px; font-weight: 600; letter-spacing: 1px;
+    padding: 2px 8px; border-radius: 2px;
+    background: var(--bg-surface); border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .rec-badge.active { background: var(--red-dim); color: var(--red); border-color: var(--red); }
+  .waveform-mini {
+    flex: 1; height: 32px;
+    background: var(--bg-deep); border: 1px solid var(--border);
+    border-radius: 2px; overflow: hidden;
+  }
+  .waveform-mini canvas { width: 100%; height: 100%; }
+
+  /* ── TRANSPORT BAR ── */
+  .transport {
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 14px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .transport-time {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 14px; color: var(--text-dim); letter-spacing: 1px;
+  }
+  .transport-sep { color: var(--border-hi); font-size: 11px; }
+  .connection-form {
+    display: flex; gap: 6px; align-items: center; margin-left: auto;
+  }
+  .conn-input {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    color: var(--text-primary); padding: 4px 10px;
+    font-family: 'Share Tech Mono', monospace; font-size: 11px;
+    border-radius: 2px; width: 140px; outline: none;
+  }
+  .conn-input:focus { border-color: var(--orange-dim); }
+  .conn-btn {
+    padding: 4px 12px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: var(--bg-raised); color: var(--orange);
+    border: 1px solid var(--orange-dim); border-radius: 2px;
+    cursor: pointer; transition: all .15s;
+  }
+  .conn-btn:hover { background: var(--orange-glow); }
+  .conn-btn.connected { color: var(--green); border-color: var(--green-dim); background: rgba(61,220,132,.1); }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-deep); }
+  ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* Layer tabs */
+  .layer-tabs {
+    display: flex; gap: 1px; padding: 6px 8px 0;
+    background: var(--bg-deep);
+  }
+  .layer-tab {
+    padding: 4px 14px;
+    font-size: 11px; font-weight: 600; letter-spacing: 1.5px;
+    text-transform: uppercase; cursor: pointer;
+    background: var(--bg-panel); color: var(--text-muted);
+    border: 1px solid var(--border); border-bottom: none;
+    border-radius: 3px 3px 0 0;
+    transition: all .1s;
+  }
+  .layer-tab:hover { color: var(--text-primary); background: var(--bg-raised); }
+  .layer-tab.active { background: var(--bg-raised); color: var(--orange); border-color: var(--orange-dim); }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed; z-index: 1000;
+    background: var(--bg-raised); border: 1px solid var(--border-hi);
+    color: var(--text-primary); padding: 4px 8px;
+    font-family: 'Share Tech Mono', monospace; font-size: 10px;
+    border-radius: 2px; pointer-events: none;
+    opacity: 0; transition: opacity .1s;
+  }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="topbar-logo">WING <span>Remote</span></div>
+  <div class="topbar-nav">
+    <button class="nav-btn active" onclick="setView('mixer')">Mixer</button>
+    <button class="nav-btn" onclick="setView('routing')">Routing</button>
+    <button class="nav-btn" onclick="setView('recording')">Recording</button>
+    <button class="nav-btn" onclick="setView('settings')">Settings</button>
+  </div>
+  <div class="topbar-status">
+    <div class="status-pill" id="oscStatus">
+      <div class="status-dot offline" id="oscDot"></div>
+      <span id="oscLabel">OSC Disconnected</span>
+    </div>
+    <div class="status-pill" id="wsStatus">
+      <div class="status-dot offline" id="wsDot"></div>
+      <span id="wsLabel">Server Offline</span>
+    </div>
+  </div>
+</div>
+
+<!-- TRANSPORT / CONNECTION BAR -->
+<div class="transport">
+  <span class="transport-time" id="clockDisplay">00:00:00:00</span>
+  <span class="transport-sep">|</span>
+  <span style="font-size:11px;color:var(--text-muted);letter-spacing:1px;">48kHz / 32bit</span>
+  <span class="transport-sep">|</span>
+  <span style="font-size:11px;color:var(--text-muted);" id="sampleCount">0 samples</span>
+  <div class="connection-form">
+    <input class="conn-input" id="wingIP" value="192.168.1.100" placeholder="Wing IP Address">
+    <input class="conn-input" style="width:70px;" id="wingPort" value="2223" placeholder="Port">
+    <button class="conn-btn" id="connectBtn" onclick="toggleConnect()">Connect</button>
+  </div>
+</div>
+
+<div class="main">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Inputs</div>
+      <div class="sidebar-item active" id="nav-ch" onclick="selectLayer('ch',this)">
+        <div class="dot" style="background:#e8820a"></div> Channels 1–40
+      </div>
+      <div class="sidebar-item" id="nav-aux" onclick="selectLayer('aux',this)">
+        <div class="dot" style="background:#4a9eff"></div> Aux In 1–8
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Buses</div>
+      <div class="sidebar-item" id="nav-bus" onclick="selectLayer('bus',this)">
+        <div class="dot" style="background:#00d4d4"></div> Mix Buses 1–16
+      </div>
+      <div class="sidebar-item" id="nav-matrix" onclick="selectLayer('matrix',this)">
+        <div class="dot" style="background:#3ddc84"></div> Matrix 1–8
+      </div>
+      <div class="sidebar-item" id="nav-dca" onclick="selectLayer('dca',this)">
+        <div class="dot" style="background:#f5a623"></div> DCA Groups 1–16
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Outputs</div>
+      <div class="sidebar-item" id="nav-main" onclick="selectLayer('main',this)">
+        <div class="dot" style="background:#e84040"></div> Mains 1–4
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Recording</div>
+      <div class="sidebar-item" id="recSidebarItem" onclick="setView('recording')">
+        <div class="dot" style="background:#e84040;animation:pulse 1s infinite"></div>
+        Multitrack Rec
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Snapshots</div>
+      <div class="sidebar-item" id="snap0">Scene 1 – Init</div>
+      <div class="sidebar-item" id="snap1">Scene 2 – Band</div>
+      <div class="sidebar-item" id="snap2">Scene 3 – Solo</div>
+    </div>
+  </div>
+
+  <!-- MIXER AREA -->
+  <div class="mixer-area" id="mixerArea">
+    <!-- Layer tabs — populated dynamically by selectLayer() -->
+    <div class="layer-tabs" id="layerTabs"></div>
+
+    <!-- Strips scroll area -->
+    <div class="strips-wrapper">
+      <div class="strips-scroll" id="stripsScroll"></div>
+    </div>
+
+    <!-- Recording bar -->
+    <div class="rec-panel" id="recPanel">
+      <div class="rec-controls">
+        <button class="rec-control-btn" id="btnRew" onclick="recTransport('rew')" title="Rewind">⏮</button>
+        <button class="rec-control-btn" id="btnStop" onclick="recTransport('stop')" title="Stop">⏹</button>
+        <button class="rec-control-btn" id="btnPlay" onclick="recTransport('play')" title="Play">▶</button>
+        <button class="rec-control-btn" id="btnRecord" onclick="recTransport('record')" title="Record">⏺</button>
+      </div>
+      <div class="rec-time" id="recTimer">00:00:00</div>
+      <div class="rec-info">
+        <div class="rec-info-row">
+          <span class="rec-badge" id="recBadge">REC READY</span>
+          <span class="rec-badge active" id="armBadge" style="display:none">● ARMED</span>
+          <span class="rec-badge" id="formatBadge">WAV 48kHz/32bit</span>
+          <span class="rec-badge" id="diskBadge">Disk: -- GB free</span>
+        </div>
+        <div class="waveform-mini"><canvas id="waveformCanvas"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DETAIL PANEL -->
+  <div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+      <div class="detail-title" id="detailTitle">CH 1</div>
+      <div class="detail-ch-badge" id="detailBadge">SELECT CHANNEL</div>
+    </div>
+
+    <!-- EQ -->
+    <div class="detail-section">
+      <div class="detail-section-label">Parametric EQ</div>
+      <div class="eq-graph-wrap">
+        <canvas id="eqCanvas" height="100"></canvas>
+      </div>
+      <div class="eq-freq-labels">
+        <span>20</span><span>100</span><span>500</span><span>1k</span><span>5k</span><span>20k</span>
+      </div>
+      <div class="eq-bands">
+        <div class="eq-band">
+          <div class="eq-band-name">LF</div>
+          <div class="knob" id="eqKnob0" data-band="0"></div>
+          <div class="eq-band-val" id="eqVal0">0.0dB</div>
+        </div>
+        <div class="eq-band">
+          <div class="eq-band-name">LMF</div>
+          <div class="knob" id="eqKnob1" data-band="1"></div>
+          <div class="eq-band-val" id="eqVal1">0.0dB</div>
+        </div>
+        <div class="eq-band">
+          <div class="eq-band-name">HMF</div>
+          <div class="knob" id="eqKnob2" data-band="2"></div>
+          <div class="eq-band-val" id="eqVal2">0.0dB</div>
+        </div>
+        <div class="eq-band">
+          <div class="eq-band-name">HF</div>
+          <div class="knob" id="eqKnob3" data-band="3"></div>
+          <div class="eq-band-val" id="eqVal3">0.0dB</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dynamics -->
+    <div class="detail-section">
+      <div class="detail-section-label">Dynamics</div>
+      <div class="dynamics-graph"><canvas id="dynCanvas"></canvas></div>
+      <div class="param-grid">
+        <div class="param-item">
+          <div class="param-item-label">Threshold</div>
+          <div class="param-item-val" id="dynThresh">−18 dB</div>
+          <input type="range" class="param-slider" min="0" max="100" value="40" oninput="updateParam('dynThresh', this.value, '−','dB', -60, 0)">
+        </div>
+        <div class="param-item">
+          <div class="param-item-label">Ratio</div>
+          <div class="param-item-val" id="dynRatio">4:1</div>
+          <input type="range" class="param-slider" min="1" max="20" value="4" oninput="updateRatio(this.value)">
+        </div>
+        <div class="param-item">
+          <div class="param-item-label">Attack</div>
+          <div class="param-item-val" id="dynAttack">10 ms</div>
+          <input type="range" class="param-slider" min="0" max="100" value="20" oninput="updateParam('dynAttack', this.value, '','ms', 0.1, 200)">
+        </div>
+        <div class="param-item">
+          <div class="param-item-label">Release</div>
+          <div class="param-item-val" id="dynRelease">120 ms</div>
+          <input type="range" class="param-slider" min="0" max="100" value="40" oninput="updateParam('dynRelease', this.value, '','ms', 10, 3000)">
+        </div>
+      </div>
+    </div>
+
+    <!-- Sends -->
+    <div class="detail-section">
+      <div class="detail-section-label">Bus Sends</div>
+      <div class="param-grid" id="busSends"></div>
+    </div>
+
+    <!-- Gate -->
+    <div class="detail-section">
+      <div class="detail-section-label">Gate / Expander</div>
+      <div class="param-grid">
+        <div class="param-item">
+          <div class="param-item-label">Gate Thresh</div>
+          <div class="param-item-val" id="gateThresh">−40 dB</div>
+          <input type="range" class="param-slider" min="0" max="100" value="30" oninput="updateParam('gateThresh', this.value, '−','dB', 60, 0)">
+        </div>
+        <div class="param-item">
+          <div class="param-item-label">Range</div>
+          <div class="param-item-val" id="gateRange">−60 dB</div>
+          <input type="range" class="param-slider" min="0" max="100" value="100" oninput="updateParam('gateRange', this.value, '−','dB', 0, 60)">
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ── STATE ──────────────────────────────────────────
+const state = {
+  connected: false,
+  recording: false,
+  playing: false,
+  armed: false,
+  recSeconds: 0,
+  recInterval: null,
+  selectedChannel: 0,
+  selectedStripType: 'ch',
+  currentLayer: 'ch',
+  channels: [],
+  aux: [], buses: [], mains: [], matrix: [], dca: [],
+  ws: null,
+  meterAnimId: null,
+};
+
+// ── MIXER MODEL ──────────────────────────────────────
+// Single source of truth for all strip types, mirroring the Wing's state.
+// All arrays are 1-indexed via objects keyed by string channel number.
+
+function makeStrip(n, prefix) {
+  return {
+    id: n, name: `${prefix} ${n}`,
+    fader: 0.75, pan: 0.0, muted: false, solo: false,
+    recArmed: false, meter: [0,0], clip: [false,false], eqBands: [0,0,0,0],
+  };
+}
+
+// Build full Wing mixer model
+state.channels = Array.from({length:40}, (_,i) => makeStrip(i+1,'CH'));
+state.aux       = Array.from({length:8},  (_,i) => makeStrip(i+1,'AUX'));
+state.buses     = Array.from({length:16}, (_,i) => makeStrip(i+1,'BUS'));
+state.mains     = Array.from({length:4},  (_,i) => ({...makeStrip(i+1,'MAIN'), name: i===0?'L/R':'MAIN '+(i+1)}));
+state.matrix    = Array.from({length:8},  (_,i) => makeStrip(i+1,'MTX'));
+state.dca       = Array.from({length:16}, (_,i) => makeStrip(i+1,'DCA'));
+
+// Layer config: defines what each sidebar nav item shows
+const LAYERS = {
+  ch:     { strips: ()=>state.channels, prefix:'CH',   tabs:['CH 1–16','CH 17–24','CH 25–32','CH 33–40'], tabSize:16, stripType:'ch',   color:'#e8820a', showMaster:false },
+  aux:    { strips: ()=>state.aux,      prefix:'AUX',  tabs:['AUX 1–8'],                                  tabSize:8,  stripType:'aux',  color:'#4a9eff', showMaster:false },
+  bus:    { strips: ()=>state.buses,    prefix:'BUS',  tabs:['BUS 1–8','BUS 9–16'],                       tabSize:8,  stripType:'bus',  color:'#00d4d4', showMaster:false },
+  matrix: { strips: ()=>state.matrix,  prefix:'MTX',  tabs:['MTX 1–8'],                                  tabSize:8,  stripType:'mtx',  color:'#3ddc84', showMaster:false },
+  dca:    { strips: ()=>state.dca,      prefix:'DCA',  tabs:['DCA 1–8','DCA 9–16'],                       tabSize:8,  stripType:'dca',  color:'#f5a623', showMaster:false },
+  main:   { strips: ()=>state.mains,    prefix:'MAIN', tabs:['MAINS 1–4'],                                tabSize:4,  stripType:'main', color:'#e84040', showMaster:true  },
+};
+
+let activeTabIndex = 0;
+
+// ── INIT ─────────────────────────────────────────────
+function initChannels() {
+  renderBusSends();
+  selectLayer('ch', document.getElementById('nav-ch'));
+  animateMeters();
+}
+
+// ── SELECT LAYER (sidebar click) ─────────────────────
+function selectLayer(layerKey, navEl) {
+  state.currentLayer = layerKey;
+  activeTabIndex = 0;
+
+  // Update sidebar active state
+  document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
+  if (navEl) navEl.classList.add('active');
+
+  const layer = LAYERS[layerKey];
+  if (!layer) return;
+
+  // Build layer tabs
+  const tabsEl = document.getElementById('layerTabs');
+  tabsEl.innerHTML = layer.tabs.map((label, i) => `
+    <div class="layer-tab ${i===0?'active':''}" onclick="selectTab(${i})">${label}</div>
+  `).join('');
+
+  renderCurrentStrips();
+}
+
+// ── SELECT TAB (page within a layer) ─────────────────
+function selectTab(idx) {
+  activeTabIndex = idx;
+  document.querySelectorAll('.layer-tab').forEach((t,i) => t.classList.toggle('active', i===idx));
+  renderCurrentStrips();
+}
+
+// ── RENDER STRIPS FOR CURRENT LAYER + TAB ────────────
+function renderCurrentStrips() {
+  const layer     = LAYERS[state.currentLayer];
+  if (!layer) return;
+  const allStrips = layer.strips();
+  const start     = activeTabIndex * layer.tabSize;
+  const page      = allStrips.slice(start, start + layer.tabSize);
+
+  const container = document.getElementById('stripsScroll');
+  container.innerHTML = '';
+
+  page.forEach((ch, pageIdx) => {
+    const globalIdx = start + pageIdx;   // index into the full layer array
+    const el = createStrip(ch, globalIdx, layer.stripType, layer.color);
+    container.appendChild(el);
+  });
+
+  // Append master/main strip only when on the main layer
+  if (layer.showMaster) {
+    container.appendChild(createMasterStrip());
+  }
+}
+
+// ── RENDER STRIPS (legacy alias used by snapshot handler) ──
+function renderStrips() { renderCurrentStrips(); }
+
+function createStrip(ch, globalIdx, stripType, accentColor) {
+  // globalIdx = position in the full layer array (0-based)
+  // ch.id     = 1-based Wing channel number
+  const stripType_ = stripType || 'ch';
+  const color      = accentColor || '#e8820a';
+  const isSelected = (stripType_ === state.currentLayer && globalIdx === state.selectedChannel);
+
+  const div = document.createElement('div');
+  div.className = 'channel-strip' + (isSelected ? ' selected' : '') + (ch.muted ? ' muted' : '');
+  div.id = `strip-${stripType_}-${ch.id}`;   // e.g. strip-ch-1, strip-bus-3
+  div.onclick = () => selectChannel(globalIdx, stripType_);
+
+  const faderPct = Math.round(ch.fader * 100);
+  const dbVal    = faderToDb(ch.fader);
+  const panVal   = Math.round(ch.pan * 100);
+  // Hide rec arm and EQ for strips that don't support it
+  const hasPan   = stripType_ !== 'dca';
+  const hasRec   = stripType_ === 'ch' || stripType_ === 'aux';
+  const hasEQ    = stripType_ === 'ch' || stripType_ === 'aux' || stripType_ === 'bus';
+
+  div.innerHTML = `
+    <div class="ch-color-bar" style="background:${color}"></div>
+    <div class="ch-number">${String(ch.id).padStart(2,'0')}</div>
+    <div class="ch-name-box" id="name-${stripType_}-${ch.id}">${ch.name}</div>
+
+    <div class="meter-wrap">
+      <div class="meter-bar"><div class="meter-fill" id="fill-l-${stripType_}-${ch.id}"></div>
+        <div class="meter-clip" id="clip-l-${stripType_}-${ch.id}"></div></div>
+      <div class="meter-bar"><div class="meter-fill" id="fill-r-${stripType_}-${ch.id}"></div>
+        <div class="meter-clip" id="clip-r-${stripType_}-${ch.id}"></div></div>
+    </div>
+
+    ${hasEQ ? `<div class="eq-thumb" onclick="event.stopPropagation();selectChannel(${globalIdx},'${stripType_}')">
+      <canvas id="eq-mini-${stripType_}-${ch.id}" width="56" height="30"></canvas>
+    </div>` : ''}
+
+    ${hasPan ? `<div class="pan-section">
+      <div class="pan-label">PAN</div>
+      <div class="knob" id="pan-${stripType_}-${ch.id}" style="transform:rotate(${panVal*1.35}deg)"
+        onmousedown="startKnobDrag(event,'pan','${stripType_}',${ch.id})"></div>
+    </div>` : ''}
+
+    <div class="ch-buttons">
+      <button class="ch-btn mute-btn ${ch.muted?'active':''}"
+        onclick="event.stopPropagation();toggleMute('${stripType_}',${ch.id})">M</button>
+      <button class="ch-btn solo-btn ${ch.solo?'active':''}"
+        onclick="event.stopPropagation();toggleSolo('${stripType_}',${ch.id})">S</button>
+      ${hasRec ? `<button class="ch-btn rec-btn ${ch.recArmed?'active':''}"
+        onclick="event.stopPropagation();toggleRec('${stripType_}',${ch.id})">R</button>` : ''}
+    </div>
+
+    <div class="fader-section">
+      <div class="fader-track" id="fader-track-${stripType_}-${ch.id}"
+        onmousedown="startFaderDrag(event,'${stripType_}',${ch.id})"
+        ontouchstart="startFaderDragTouch(event,'${stripType_}',${ch.id})">
+        <div class="fader-0db"></div>
+        <div class="fader-fill" id="fader-fill-${stripType_}-${ch.id}" style="height:${faderPct}%"></div>
+        <div class="fader-handle" id="fader-handle-${stripType_}-${ch.id}"
+          style="bottom:calc(${faderPct}% - 7px)"></div>
+      </div>
+      <div class="fader-db" id="fader-db-${stripType_}-${ch.id}">${dbVal}</div>
+    </div>
+  `;
+  return div;
+}
+
+function createMasterStrip() {
+  const div = document.createElement('div');
+  div.className = 'channel-strip master';
+  div.style.marginLeft = '12px';
+  div.innerHTML = `
+    <div class="ch-color-bar" style="background:var(--orange)"></div>
+    <div class="ch-number" style="color:var(--orange)">LR</div>
+    <div class="ch-name-box" style="color:var(--orange)">MASTER</div>
+    <div class="meter-wrap">
+      <div class="meter-bar" id="meter-l-master"><div class="meter-fill" id="fill-l-master" style="height:65%"></div><div class="meter-clip" id="clip-l-master"></div></div>
+      <div class="meter-bar" id="meter-r-master"><div class="meter-fill" id="fill-r-master" style="height:60%"></div><div class="meter-clip" id="clip-r-master"></div></div>
+    </div>
+    <div class="fader-section" style="min-height:140px">
+      <div class="fader-track" id="fader-track-master" onmousedown="startFaderDrag(event,'master')">
+        <div class="fader-0db"></div>
+        <div class="fader-fill" id="fader-fill-master" style="height:75%"></div>
+        <div class="fader-handle" id="fader-handle-master" style="bottom:calc(75% - 7px)"></div>
+      </div>
+      <div class="fader-db" id="fader-db-master">0.0 dB</div>
+    </div>
+  `;
+  return div;
+}
+
+// ── METER STATE & ANIMATION ──────────────────────────────────────────────────
+// Meter values come from the Wing via WebSocket (fader positions + subscription).
+// We smooth-interpolate toward target values each animation frame.
+const meterTargets = {};  // { "1": 0.75, ... } keyed by 1-based channel number
+
+function applyMeterValues(channelMap) {
+  // channelMap from backend: { "1": 0.75, ... } keyed by 1-based ch number (channels only for now)
+  Object.entries(channelMap).forEach(([ch, val]) => {
+    meterTargets[`ch-${ch}`] = Math.max(0, Math.min(1, val));
+  });
+}
+
+function animateMeters() {
+  // Animate the currently VISIBLE strips only (whichever layer is shown)
+  const layer = LAYERS[state.currentLayer];
+  if (!layer) { requestAnimationFrame(animateMeters); return; }
+  const allStrips  = layer.strips();
+  const start      = activeTabIndex * layer.tabSize;
+  const page       = allStrips.slice(start, start + layer.tabSize);
+  const stripType_ = layer.stripType;
+
+  page.forEach(ch => {
+    const chKey  = `${stripType_}-${ch.id}`;
+    const wingConnected = state.ws && state.ws.readyState === 1;
+
+    // Real values from Wing when connected, fake animation when not
+    let target;
+    if (wingConnected && meterTargets[chKey] !== undefined) {
+      target = meterTargets[chKey];
+    } else if (!wingConnected) {
+      // Fake oscillating animation when disconnected
+      const t = Date.now() / 1000;
+      target = ch.muted ? 0 : ch.fader * (0.5 + 0.3 * Math.sin(t * 2.1 + ch.id));
+    } else {
+      target = ch.muted ? 0 : ch.fader * 0.5;
+    }
+
+    const current = ch.meter[0] || 0;
+    const diff    = target - current;
+    ch.meter[0]   = current + diff * (diff > 0 ? 0.4 : 0.15);
+    ch.meter[1]   = ch.meter[0] * (0.95 + Math.random() * 0.05);
+
+    const fl = document.getElementById(`fill-l-${chKey}`);
+    const fr = document.getElementById(`fill-r-${chKey}`);
+    if (fl) fl.style.height = (ch.meter[0] * 100) + '%';
+    if (fr) fr.style.height = (ch.meter[1] * 100) + '%';
+
+    ch.clip[0] = ch.meter[0] > 0.95;
+    document.getElementById(`clip-l-${chKey}`)?.classList.toggle('active', ch.clip[0]);
+    document.getElementById(`clip-r-${chKey}`)?.classList.toggle('active', ch.clip[0]);
+
+    // EQ mini canvas (channels/aux/buses only)
+    const eqC = document.getElementById(`eq-mini-${chKey}`);
+    if (eqC) drawEqMini(eqC, ch.eqBands, layer.color);
+  });
+
+  requestAnimationFrame(animateMeters);
+}
+// ── EQ DRAWING ───────────────────────────────────────
+function drawEqMini(canvas, bands, color) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = color || 'var(--cyan)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x <= W; x++) {
+    const freq = 20 * Math.pow(1000, x / W);
+    const y = H/2 - getEqCurve(freq, bands) * (H / 30);
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  // Zero line
+  ctx.strokeStyle = 'rgba(255,255,255,.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke();
+}
+
+function getEqCurve(freq, bands) {
+  const centers = [100, 400, 2000, 8000];
+  let gain = 0;
+  bands.forEach((g, i) => {
+    const ratio = freq / centers[i];
+    gain += g / (1 + Math.pow(Math.log2(ratio) * 2, 2));
+  });
+  return gain;
+}
+
+function drawEqMain(bands) {
+  const canvas = document.getElementById('eqCanvas');
+  if (!canvas) return;
+  canvas.width = canvas.offsetWidth || 280;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,.04)';
+  ctx.lineWidth = 1;
+  [25, 50, 75].forEach(y => {
+    ctx.beginPath(); ctx.moveTo(0, y/100*H); ctx.lineTo(W, y/100*H); ctx.stroke();
+  });
+
+  // Curve fill
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(0,212,212,.25)');
+  grad.addColorStop(1, 'rgba(0,212,212,.0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  for (let x = 0; x <= W; x++) {
+    const freq = 20 * Math.pow(1000, x / W);
+    const y = H/2 - getEqCurve(freq, bands) * (H / 30);
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+
+  // Curve line
+  ctx.strokeStyle = 'var(--cyan,#00d4d4)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let x = 0; x <= W; x++) {
+    const freq = 20 * Math.pow(1000, x / W);
+    const y = H/2 - getEqCurve(freq, bands) * (H / 30);
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function drawDynGraph(thresh, ratio) {
+  const canvas = document.getElementById('dynCanvas');
+  if (!canvas) return;
+  canvas.width = canvas.offsetWidth || 280;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const t = (thresh / -60) * W; // threshold x
+  ctx.strokeStyle = 'rgba(255,255,255,.05)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(t, 0); ctx.lineTo(t, H); ctx.stroke();
+
+  const grad = ctx.createLinearGradient(0, H, W, 0);
+  grad.addColorStop(0, 'rgba(232,130,10,.1)');
+  grad.addColorStop(1, 'rgba(232,130,10,.35)');
+  ctx.fillStyle = grad;
+  ctx.strokeStyle = 'var(--orange,#e8820a)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(t, H - t);
+  ctx.lineTo(W, H - t - (W - t) / ratio);
+  ctx.stroke();
+}
+
+// ── FADER DRAG ──────────────────────────────────────
+let dragState = null;
+function startFaderDrag(e, stripType, id) {
+  e.preventDefault();
+  const track = document.getElementById(`fader-track-${stripType}-${id}`);
+  if (!track) return;
+  const ch = _getStrip(stripType, id) || {fader:0.75};
+  dragState = { stripType, id, track, startY: e.clientY, startFader: ch.fader };
+  document.addEventListener('mousemove', onFaderDrag);
+  document.addEventListener('mouseup', endFaderDrag);
+}
+function onFaderDrag(e) {
+  if (!dragState) return;
+  const rect = dragState.track.getBoundingClientRect();
+  const val  = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
+  setFader(dragState.stripType, dragState.id, val);
+}
+function endFaderDrag() {
+  dragState = null;
+  document.removeEventListener('mousemove', onFaderDrag);
+  document.removeEventListener('mouseup', endFaderDrag);
+}
+function setFader(stripType, id, val) {
+  const ch = _getStrip(stripType, id);
+  if (ch) ch.fader = val;
+  const key = `${stripType}-${id}`;
+  const fill   = document.getElementById(`fader-fill-${key}`);
+  const handle = document.getElementById(`fader-handle-${key}`);
+  const dbEl   = document.getElementById(`fader-db-${key}`);
+  if (fill)   fill.style.height   = (val*100)+'%';
+  if (handle) handle.style.bottom = `calc(${val*100}% - 7px)`;
+  if (dbEl)   dbEl.textContent    = faderToDb(val);
+  sendFader(stripType, id, val);
+}
+function faderToDb(v) {
+  if (v <= 0) return '−∞';
+  const db = v === 1 ? 10 : (Math.log(v) * 20 / Math.LN10);
+  return (db >= 0 ? '+' : '') + db.toFixed(1) + ' dB';
+}
+
+// ── CHANNEL SELECTION ───────────────────────────────
+function selectChannel(globalIdx, stripType) {
+  state.selectedChannel   = globalIdx;
+  state.selectedStripType = stripType || state.currentLayer;
+  document.querySelectorAll('.channel-strip').forEach(s => s.classList.remove('selected'));
+  const layer = LAYERS[state.selectedStripType];
+  if (!layer) return;
+  const ch = layer.strips()[globalIdx];
+  if (!ch) return;
+  document.getElementById(`strip-${state.selectedStripType}-${ch.id}`)?.classList.add('selected');
+  document.getElementById('detailTitle').textContent = ch.name;
+  document.getElementById('detailBadge').textContent = `${layer.prefix} ${ch.id}`;
+  drawEqMain(ch.eqBands);
+  drawDynGraph(-18, 4);
+}
+
+// ── MUTE / SOLO / REC ───────────────────────────────
+function _getStripArray(stripType) {
+  return {ch:'channels',aux:'aux',bus:'buses',main:'mains',matrix:'matrix',dca:'dca'}[stripType] || 'channels';
+}
+function _getStrip(stripType, id) {
+  const arr = state[_getStripArray(stripType)];
+  return arr ? arr[id-1] : null;
+}
+
+function toggleMute(stripType, id) {
+  const ch = _getStrip(stripType, id);
+  if (!ch) return;
+  ch.muted = !ch.muted;
+  const stripEl = document.getElementById(`strip-${stripType}-${id}`);
+  stripEl?.classList.toggle('muted', ch.muted);
+  stripEl?.querySelector('.mute-btn')?.classList.toggle('active', ch.muted);
+  if (ch.muted) meterTargets[`${stripType}-${id}`] = 0;
+  sendMuteToggle(stripType, id);
+}
+function toggleSolo(stripType, id) {
+  const ch = _getStrip(stripType, id);
+  if (!ch) return;
+  ch.solo = !ch.solo;
+  const stripEl = document.getElementById(`strip-${stripType}-${id}`);
+  stripEl?.querySelector('.solo-btn')?.classList.toggle('active', ch.solo);
+  sendOSC(`/${stripType}/${id}/$solo`, ch.solo ? 1 : 0);
+}
+function toggleRec(stripType, id) {
+  const ch = _getStrip(stripType, id);
+  if (!ch) return;
+  ch.recArmed = !ch.recArmed;
+  const stripEl = document.getElementById(`strip-${stripType}-${id}`);
+  stripEl?.querySelector('.rec-btn')?.classList.toggle('active', ch.recArmed);
+}
+
+// ── KNOB DRAG ───────────────────────────────────────
+let knobDrag = null;
+function startKnobDrag(e, type, stripType, id) {
+  e.stopPropagation(); e.preventDefault();
+  const ch = _getStrip(stripType, id) || {pan:0};
+  knobDrag = { type, stripType, id, startY: e.clientY, startVal: ch.pan };
+  document.addEventListener('mousemove', onKnobDrag);
+  document.addEventListener('mouseup', endKnobDrag);
+}
+function onKnobDrag(e) {
+  if (!knobDrag) return;
+  const delta = (knobDrag.startY - e.clientY) / 100;
+  if (knobDrag.type === 'pan') {
+    const val = Math.max(-1, Math.min(1, knobDrag.startVal + delta));
+    const ch = _getStrip(knobDrag.stripType, knobDrag.id);
+    if (ch) ch.pan = val;
+    const knob = document.getElementById(`pan-${knobDrag.stripType}-${knobDrag.id}`);
+    if (knob) knob.style.transform = `rotate(${val*135}deg)`;
+    sendPan(knobDrag.stripType, knobDrag.id, val);
+  }
+}
+function endKnobDrag() {
+  knobDrag = null;
+  document.removeEventListener('mousemove', onKnobDrag);
+  document.removeEventListener('mouseup', endKnobDrag);
+}
+
+// ── RECORDING TRANSPORT ─────────────────────────────
+function recTransport(action) {
+  const timerEl = document.getElementById('recTimer');
+  const badge = document.getElementById('recBadge');
+  const armBadge = document.getElementById('armBadge');
+  const btn = document.getElementById('btnRecord');
+  const playBtn = document.getElementById('btnPlay');
+
+  if (action === 'record') {
+    state.recording = !state.recording;
+    btn.classList.toggle('rec-armed', state.recording);
+    timerEl.classList.toggle('recording', state.recording);
+    badge.textContent = state.recording ? '● RECORDING' : 'REC READY';
+    badge.classList.toggle('active', state.recording);
+    armBadge.style.display = state.recording ? 'inline' : 'none';
+    if (state.recording) {
+      state.recSeconds = 0;
+      clearInterval(state.recInterval);
+      state.recInterval = setInterval(() => {
+        state.recSeconds++;
+        const h = String(Math.floor(state.recSeconds/3600)).padStart(2,'0');
+        const m = String(Math.floor(state.recSeconds%3600/60)).padStart(2,'0');
+        const s = String(state.recSeconds%60).padStart(2,'0');
+        timerEl.textContent = `${h}:${m}:${s}`;
+      }, 1000);
+    } else {
+      clearInterval(state.recInterval);
+      timerEl.textContent = '00:00:00';
+    }
+  } else if (action === 'play') {
+    state.playing = !state.playing;
+    playBtn.classList.toggle('playing', state.playing);
+    playBtn.textContent = state.playing ? '⏸' : '▶';
+  } else if (action === 'stop') {
+    state.recording = false; state.playing = false;
+    btn.classList.remove('rec-armed');
+    playBtn.classList.remove('playing'); playBtn.textContent = '▶';
+    timerEl.classList.remove('recording');
+    badge.textContent = 'REC READY'; badge.classList.remove('active');
+    armBadge.style.display = 'none';
+    clearInterval(state.recInterval);
+    timerEl.textContent = '00:00:00'; state.recSeconds = 0;
+  } else if (action === 'rew') {
+    state.recSeconds = 0;
+    timerEl.textContent = '00:00:00';
+  }
+}
+
+// ── WAVEFORM ANIMATION ──────────────────────────────
+function animateWaveform() {
+  const canvas = document.getElementById('waveformCanvas');
+  if (!canvas) { requestAnimationFrame(animateWaveform); return; }
+  canvas.width = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (state.recording) {
+    ctx.strokeStyle = 'rgba(232,64,64,.7)';
+  } else {
+    ctx.strokeStyle = 'rgba(232,130,10,.4)';
+  }
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const time = Date.now() / 300;
+  for (let x = 0; x < W; x++) {
+    const amp = state.recording ? .35 : .15;
+    const y = H/2 + Math.sin(x/8 + time) * H * amp * Math.sin(x/50 + time*.3);
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  requestAnimationFrame(animateWaveform);
+}
+
+// ── PARAM UPDATERS ───────────────────────────────────
+function updateParam(id, v, prefix, suffix, min, max) {
+  const val = min + (v/100) * (max - min);
+  const formatted = Math.abs(val) < 10 ? val.toFixed(1) : Math.round(val);
+  document.getElementById(id).textContent = `${prefix}${Math.abs(formatted)} ${suffix}`;
+}
+function updateRatio(v) {
+  const ratios = [1.1,1.5,2,3,4,6,8,10,20];
+  const r = ratios[Math.min(Math.floor(v/3), ratios.length-1)];
+  document.getElementById('dynRatio').textContent = `${r}:1`;
+}
+
+// ── BUS SENDS ───────────────────────────────────────
+function renderBusSends() {
+  const container = document.getElementById('busSends');
+  const sends = ['MIX 1','MIX 2','MIX 3','MIX 4','FX 1','FX 2'];
+  container.innerHTML = sends.map((name, i) => `
+    <div class="param-item">
+      <div class="param-item-label">${name}</div>
+      <div class="param-item-val" id="send-${i}">0.0 dB</div>
+      <input type="range" class="param-slider" min="0" max="100" value="${40+Math.random()*20|0}"
+        oninput="updateSend(${i}, this.value)">
+    </div>
+  `).join('');
+}
+function updateSend(i, v) {
+  const db = (v/100 * 70 - 60).toFixed(1);
+  document.getElementById(`send-${i}`).textContent = `${db >= 0 ? '+' : ''}${db} dB`;
+}
+
+// ── LAYER TABS ───────────────────────────────────────
+// layer tab clicks are handled by selectTab() inline onclick
+
+// ── VIEW SWITCHER ───────────────────────────────────
+function setView(v) {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  const btns = document.querySelectorAll('.nav-btn');
+  const idx = ['mixer','routing','recording','settings'].indexOf(v);
+  if (btns[idx]) btns[idx].classList.add('active');
+}
+// selectLayer is now defined above in the mixer model section
+
+// ── WEBSOCKET AUTO-CONNECT ───────────────────────────
+// The WebSocket to our backend opens automatically on page load.
+// The backend's wing_probe_loop() handles Wing connectivity and broadcasts
+// wing_status messages which applyWingStatus() applies to the UI.
+// The Connect button is kept for manual re-trigger / force reconnect.
+
+function connectWebSocket() {
+  if (state.ws && state.ws.readyState <= 1) return;  // already open/connecting
+  try {
+    const wsUrl = `ws://${location.host}/ws`;
+    state.ws = new WebSocket(wsUrl);
+    state.ws.onopen = () => {
+      console.log('[WING Remote] WebSocket connected to backend');
+      document.getElementById('wsDot')?.classList.remove('offline');
+      const lbl = document.getElementById('wsLabel');
+      if (lbl) lbl.textContent = 'Server Online';
+    };
+    state.ws.onclose = () => {
+      console.warn('[WING Remote] WebSocket closed — retrying in 3s');
+      document.getElementById('wsDot')?.classList.add('offline');
+      const lbl = document.getElementById('wsLabel');
+      if (lbl) lbl.textContent = 'Server Offline';
+      setTimeout(connectWebSocket, 3000);  // auto-reconnect
+    };
+    state.ws.onerror = (e) => console.warn('[WS error]', e);
+    state.ws.onmessage = (evt) => {
+      try { handleServerMessage(JSON.parse(evt.data)); }
+      catch(e) { console.warn('WS parse error', e); }
+    };
+  } catch(e) { console.warn('WebSocket failed:', e); }
+}
+
+function toggleConnect() {
+  // Manual button: override Wing IP/port from the UI fields and
+  // send a re-configure request to the backend, then wait for probe result
+  const ip   = document.getElementById('wingIP')?.value.trim();
+  const port = parseInt(document.getElementById('wingPort')?.value) || 2223;
+  if (!ip) return;
+
+  // Push new config to backend via REST
+  fetch('/api/setup/apply', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ wing_ip: ip, wing_osc_port: port }),
+  }).then(r => r.json()).then(d => {
+    console.log('[WING Remote] Config applied', d);
+  }).catch(e => console.warn('Config apply failed', e));
+
+  // Show "probing…" state
+  const oscLabel = document.getElementById('oscLabel');
+  if (oscLabel) oscLabel.textContent = 'Probing Wing…';
+}
+
+// ── WING CONNECTION STATUS ───────────────────────────
+function applyWingStatus(connected, ip, port) {
+  state.connected = connected;
+
+  const oscDot   = document.getElementById('oscDot');
+  const oscLabel = document.getElementById('oscLabel');
+  const wsDot    = document.getElementById('wsDot');
+  const wsLabel  = document.getElementById('wsLabel');
+  const btn      = document.getElementById('connectBtn');
+
+  if (connected) {
+    oscDot?.classList.remove('offline');
+    if (oscLabel) oscLabel.textContent = `OSC Connected · ${ip}`;
+    wsDot?.classList.remove('offline');
+    if (wsLabel) wsLabel.textContent = 'Wing Active';
+    if (btn) { btn.textContent = 'Disconnect'; btn.classList.add('connected'); }
+    // Update IP/port fields to match what backend is using
+    const ipEl   = document.getElementById('wingIP');
+    const portEl = document.getElementById('wingPort');
+    if (ipEl   && ip)   ipEl.value   = ip;
+    if (portEl && port) portEl.value = port;
+  } else {
+    oscDot?.classList.add('offline');
+    if (oscLabel) oscLabel.textContent = 'Wing Unreachable';
+    wsDot?.classList.add('offline');
+    if (wsLabel) wsLabel.textContent = 'Waiting for Wing…';
+    if (btn) { btn.textContent = 'Connect'; btn.classList.remove('connected'); }
+  }
+}
+
+// ── WING OSC PATH HELPERS (correct Wing protocol) ───
+// Wing uses /ch/{n}/fdr  NOT /ch/01/mix/fader (that's X32)
+// Wing uses /ch/{n}/mute NOT /ch/01/mix/on
+// Wing pan: -100 to +100; mute: "ON"=unmuted "OFF"=muted
+const WING = {
+  fader:     (ch) => `/ch/${ch}/fdr`,
+  mute:      (ch) => `/ch/${ch}/mute`,
+  pan:       (ch) => `/ch/${ch}/pan`,
+  busFader:  (b)  => `/bus/${b}/fdr`,
+  mainFader: (n)  => `/main/${n||1}/fdr`,   // main 1 = L/R stereo
+  subscribe: '/*S',   // correct Wing subscription command
+};
+
+// ── OSC SEND (via WebSocket to backend) ─────────────
+function sendOSC(path, value) {
+  if (!state.ws || state.ws.readyState !== 1) return;
+  state.ws.send(JSON.stringify({ type: 'osc', path, value }));
+  console.log(`[OSC] ${path} = ${value}`);
+}
+function sendFader(strip, ch, val) {
+  // strip = 'ch'|'aux'|'bus'|'main'|'mtx'|'dca'
+  if (!state.ws || state.ws.readyState !== 1) return;
+  state.ws.send(JSON.stringify({ type: 'fader', strip: strip||'ch', ch: String(ch), value: val }));
+}
+function sendMute(strip, ch, muted) {
+  if (!state.ws || state.ws.readyState !== 1) return;
+  state.ws.send(JSON.stringify({ type: 'mute', strip: strip||'ch', ch, value: muted }));
+}
+function sendMuteToggle(strip, ch) {
+  // Efficient toggle — Wing handles 0↔1 flip with integer -1
+  if (!state.ws || state.ws.readyState !== 1) return;
+  state.ws.send(JSON.stringify({ type: 'mute_toggle', strip: strip||'ch', ch }));
+}
+function sendPan(strip, ch, val) {
+  // val = -1.0..1.0 from UI; backend sends *100 to Wing (-100..100)
+  if (!state.ws || state.ws.readyState !== 1) return;
+  state.ws.send(JSON.stringify({ type: 'pan', strip: strip||'ch', ch, value: val }));
+}
+
+// ── HANDLE SERVER → BROWSER MESSAGES ───────────────
+function handleServerMessage(msg) {
+  const type = msg.type;
+  if (type === 'snapshot') {
+    // Full mixer snapshot on connect — populate all strip arrays from Wing state
+    const sectionMap = {
+      channels: {arr: state.channels, type:'ch'},
+      aux:      {arr: state.aux,      type:'aux'},
+      buses:    {arr: state.buses,    type:'bus'},
+      main:     {arr: state.mains,    type:'main'},
+      matrix:   {arr: state.matrix,   type:'matrix'},
+      dca:      {arr: state.dca,      type:'dca'},
+    };
+    Object.entries(sectionMap).forEach(([section, {arr, type:stype}]) => {
+      const data = msg.mixer?.[section] || {};
+      Object.entries(data).forEach(([ch, d]) => {
+        const i = parseInt(ch) - 1;
+        if (i < 0 || i >= arr.length) return;
+        if (d.fader !== undefined) arr[i].fader = d.fader;
+        if (d.mute  !== undefined) arr[i].muted = d.mute;
+        if (d.pan   !== undefined) arr[i].pan   = d.pan;
+        if (d.name  !== undefined && d.name !== '') arr[i].name = d.name;
+        // Seed meter targets
+        if (d.fader !== undefined) meterTargets[`${stype}-${ch}`] = d.mute ? 0 : d.fader * 0.7;
+      });
+    });
+    // Re-render current layer to reflect new values
+    renderCurrentStrips();
+  } else if (type === 'meters') {
+    // Real meter values from Wing (fader positions or future native meter data)
+    applyMeterValues(msg.channels || {});
+  } else if (type === 'fader') {
+    const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
+    const arrKey = sectionMap[msg.strip] || 'channels';
+    const i = parseInt(msg.ch) - 1;
+    if (i >= 0 && state[arrKey]?.[i]) {
+      state[arrKey][i].fader = msg.value;
+      // Update DOM if strip is currently visible
+      const key = `${msg.strip}-${msg.ch}`;
+      const fill   = document.getElementById(`fader-fill-${key}`);
+      const handle = document.getElementById(`fader-handle-${key}`);
+      const dbEl   = document.getElementById(`fader-db-${key}`);
+      if (fill)   fill.style.height   = (msg.value * 100) + '%';
+      if (handle) handle.style.bottom = `calc(${msg.value * 100}% - 7px)`;
+      if (dbEl)   dbEl.textContent    = faderToDb(msg.value);
+      // Update meter target
+      if (!state[arrKey][i].muted) meterTargets[key] = msg.value * 0.7;
+    }
+  } else if (type === 'mute') {
+    const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
+    const arrKey = sectionMap[msg.strip] || 'channels';
+    const i = parseInt(msg.ch) - 1;
+    if (i >= 0 && state[arrKey]?.[i]) {
+      state[arrKey][i].muted = msg.value;
+      const key = `${msg.strip}-${msg.ch}`;
+      const stripEl = document.getElementById(`strip-${key}`);
+      stripEl?.classList.toggle('muted', msg.value);
+      stripEl?.querySelector('.mute-btn')?.classList.toggle('active', msg.value);
+      if (msg.value) meterTargets[key] = 0;
+    }
+  } else if (type === 'pan') {
+    const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix'};
+    const arrKey = sectionMap[msg.strip] || 'channels';
+    const i = parseInt(msg.ch) - 1;
+    if (i >= 0 && state[arrKey]?.[i]) {
+      state[arrKey][i].pan = msg.value;
+      const knob = document.getElementById(`pan-${msg.strip}-${msg.ch}`);
+      if (knob) knob.style.transform = `rotate(${msg.value * 135}deg)`;
+    }
+  } else if (type === 'wing_status') {
+    // Auto-connection status from backend probe loop
+    applyWingStatus(msg.connected, msg.wing_ip, msg.wing_port);
+  } else if (type === 'main_fader') {
+    const fill   = document.getElementById('fader-fill-master');
+    const handle = document.getElementById('fader-handle-master');
+    const dbEl   = document.getElementById('fader-db-master');
+    if (fill)   fill.style.height   = (msg.value * 100) + '%';
+    if (handle) handle.style.bottom = `calc(${msg.value * 100}% - 7px)`;
+    if (dbEl)   dbEl.textContent    = faderToDb(msg.value);
+  } else if (type === 'name') {
+    // Name update from Wing — apply to the correct strip array
+    const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
+    const arrKey = sectionMap[msg.strip];
+    if (arrKey) {
+      const i = parseInt(msg.ch) - 1;
+      if (i >= 0 && state[arrKey]?.[i]) {
+        state[arrKey][i].name = msg.value || state[arrKey][i].name;
+        // Update DOM if strip is currently visible
+        const nameEl = document.getElementById(`name-${msg.strip}-${msg.ch}`);
+        if (nameEl && msg.value) nameEl.textContent = msg.value;
+      }
+    }
+    // Update detail panel if this is the selected channel
+    if (msg.strip === state.selectedStripType &&
+        parseInt(msg.ch) - 1 === state.selectedChannel) {
+      if (msg.value) document.getElementById('detailTitle').textContent = msg.value;
+    }
+  } else if (type === 'record_status') {
+    if (msg.status === 'recording') {
+      document.getElementById('recBadge').textContent = '● RECORDING';
+      document.getElementById('recBadge').classList.add('active');
+    } else if (msg.status === 'stopped') {
+      document.getElementById('recBadge').textContent = 'REC READY';
+      document.getElementById('recBadge').classList.remove('active');
+    }
+  }
+}
+
+function updateFaderUI(stripType, id, val) {
+  const key    = `${stripType}-${id}`;
+  const fill   = document.getElementById(`fader-fill-${key}`);
+  const handle = document.getElementById(`fader-handle-${key}`);
+  const dbEl   = document.getElementById(`fader-db-${key}`);
+  if (fill)   fill.style.height   = (val * 100) + '%';
+  if (handle) handle.style.bottom = `calc(${val * 100}% - 7px)`;
+  if (dbEl)   dbEl.textContent    = faderToDb(val);
+}
+
+// ── CLOCK ────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const frames = pad(Math.floor(now.getMilliseconds() / 1000 * 30));
+  document.getElementById('clockDisplay').textContent =
+    `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}:${frames}`;
+}
+setInterval(updateClock, 33);
+
+// ── TOUCH FADER ──────────────────────────────────────
+function startFaderDragTouch(e, stripType, id) {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const track = document.getElementById(`fader-track-${stripType}-${id}`);
+  const ch    = _getStrip(stripType, id) || {fader:0.75};
+  dragState   = { stripType, id, track, startY: touch.clientY, startFader: ch.fader };
+  document.addEventListener('touchmove', onTouchFader, { passive: false });
+  document.addEventListener('touchend', endTouchFader);
+}
+function onTouchFader(e) {
+  if (!dragState) return;
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect  = dragState.track.getBoundingClientRect();
+  const val   = Math.max(0, Math.min(1, 1 - (touch.clientY - rect.top) / rect.height));
+  setFader(dragState.stripType, dragState.id, val);
+}
+function endTouchFader() {
+  dragState = null;
+  document.removeEventListener('touchmove', onTouchFader);
+  document.removeEventListener('touchend', endTouchFader);
+}
+
+// ── INIT ─────────────────────────────────────────────
+initChannels();
+animateWaveform();
+// Connect WebSocket to backend immediately on page load
+connectWebSocket();
+setTimeout(() => {
+  selectChannel(0, 'ch');
+  drawDynGraph(-18, 4);
+  // Auto-launch setup wizard on first load (if Wing IP is still default)
+  checkAndLaunchWizard();
+}, 100);
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SETUP WIZARD MODAL
+════════════════════════════════════════════════════════════════════════════ -->
+<style>
+  /* Overlay */
+  .wizard-overlay {
+    position: fixed; inset: 0; z-index: 9000;
+    background: rgba(0,0,0,.85);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s;
+  }
+  .wizard-overlay.visible { opacity: 1; pointer-events: all; }
+
+  /* Modal */
+  .wizard-modal {
+    width: 640px; max-width: 95vw; max-height: 88vh;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-hi);
+    border-radius: 4px;
+    display: flex; flex-direction: column;
+    box-shadow: 0 24px 80px rgba(0,0,0,.8);
+    overflow: hidden;
+    transform: translateY(16px);
+    transition: transform .2s;
+  }
+  .wizard-overlay.visible .wizard-modal { transform: translateY(0); }
+
+  .wizard-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .wizard-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 18px; font-weight: 700; letter-spacing: 3px;
+    text-transform: uppercase; color: var(--orange);
+  }
+  .wizard-close {
+    width: 28px; height: 28px; border-radius: 2px;
+    background: var(--bg-raised); border: 1px solid var(--border);
+    color: var(--text-dim); font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .1s;
+  }
+  .wizard-close:hover { color: var(--text-primary); border-color: var(--border-hi); }
+
+  /* Steps breadcrumb */
+  .wizard-steps {
+    display: flex; gap: 0;
+    background: var(--bg-deep);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .wizard-step-tab {
+    flex: 1; padding: 10px 8px;
+    font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; text-align: center;
+    color: var(--text-muted);
+    border-right: 1px solid var(--border);
+    position: relative;
+    transition: all .15s;
+  }
+  .wizard-step-tab:last-child { border-right: none; }
+  .wizard-step-tab.active { color: var(--orange); background: var(--bg-panel); }
+  .wizard-step-tab.done { color: var(--green); }
+  .wizard-step-tab .step-num {
+    display: block;
+    font-size: 18px; font-weight: 700;
+    font-family: 'Share Tech Mono', monospace;
+    margin-bottom: 2px;
+  }
+  .wizard-step-tab.done .step-num::after { content: ' ✓'; font-size: 14px; }
+
+  /* Body */
+  .wizard-body {
+    flex: 1; overflow-y: auto; padding: 20px;
+  }
+
+  /* Step panels */
+  .wizard-panel { display: none; }
+  .wizard-panel.active { display: block; }
+
+  .wiz-section-label {
+    font-size: 9px; font-weight: 700; letter-spacing: 2px;
+    color: var(--text-muted); text-transform: uppercase;
+    margin-bottom: 10px; margin-top: 18px;
+  }
+  .wiz-section-label:first-child { margin-top: 0; }
+
+  /* Detection cards */
+  .detect-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .detect-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 3px; padding: 10px 12px;
+  }
+  .detect-card-label {
+    font-size: 9px; letter-spacing: 1.5px; color: var(--text-muted);
+    text-transform: uppercase; margin-bottom: 4px;
+  }
+  .detect-card-val {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px; color: var(--text-primary);
+  }
+  .detect-card-val.ok   { color: var(--green); }
+  .detect-card-val.warn { color: var(--amber); }
+  .detect-card-val.err  { color: var(--red); }
+
+  /* Form rows */
+  .wiz-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+  }
+  .wiz-label {
+    font-size: 12px; font-weight: 600; letter-spacing: .5px;
+    color: var(--text-dim); min-width: 130px;
+  }
+  .wiz-input {
+    flex: 1;
+    background: var(--bg-surface); border: 1px solid var(--border);
+    color: var(--text-primary); padding: 7px 10px;
+    font-family: 'Share Tech Mono', monospace; font-size: 12px;
+    border-radius: 2px; outline: none;
+  }
+  .wiz-input:focus { border-color: var(--orange-dim); }
+  .wiz-select {
+    flex: 1;
+    background: var(--bg-surface); border: 1px solid var(--border);
+    color: var(--text-primary); padding: 7px 10px;
+    font-family: 'Share Tech Mono', monospace; font-size: 12px;
+    border-radius: 2px; outline: none; cursor: pointer;
+  }
+
+  /* Test button + result */
+  .wiz-test-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .wiz-test-btn {
+    padding: 7px 16px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: var(--bg-raised); color: var(--orange);
+    border: 1px solid var(--orange-dim); border-radius: 2px;
+    cursor: pointer; transition: all .15s; white-space: nowrap;
+  }
+  .wiz-test-btn:hover { background: var(--orange-glow); }
+  .wiz-test-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .wiz-test-result {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px; flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-deep); border: 1px solid var(--border);
+    border-radius: 2px; color: var(--text-dim);
+    min-height: 30px; display: flex; align-items: center;
+  }
+  .wiz-test-result.ok  { color: var(--green); border-color: var(--green-dim); }
+  .wiz-test-result.err { color: var(--red);   border-color: var(--red-dim); }
+
+  /* Toggle switch */
+  .wiz-toggle-row {
+    display: flex; align-items: flex-start; gap: 12px;
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 3px; padding: 12px 14px; margin-bottom: 8px;
+  }
+  .wiz-toggle {
+    position: relative; width: 40px; height: 22px; flex-shrink: 0; margin-top: 2px;
+  }
+  .wiz-toggle input { opacity: 0; width: 0; height: 0; }
+  .wiz-toggle-slider {
+    position: absolute; inset: 0; border-radius: 11px;
+    background: var(--bg-raised); border: 1px solid var(--border-hi);
+    cursor: pointer; transition: all .2s;
+  }
+  .wiz-toggle-slider::before {
+    content: ''; position: absolute;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--text-muted);
+    top: 2px; left: 2px; transition: all .2s;
+  }
+  .wiz-toggle input:checked + .wiz-toggle-slider { background: var(--orange-dim); border-color: var(--orange); }
+  .wiz-toggle input:checked + .wiz-toggle-slider::before { transform: translateX(18px); background: var(--orange); }
+  .wiz-toggle-info { flex: 1; }
+  .wiz-toggle-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
+  .wiz-toggle-desc { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+  .wiz-toggle-badge {
+    font-size: 9px; font-weight: 700; letter-spacing: 1px;
+    padding: 2px 6px; border-radius: 2px; text-transform: uppercase;
+    margin-left: 6px; vertical-align: middle;
+  }
+  .badge-detected { background: rgba(61,220,132,.15); color: var(--green); border: 1px solid var(--green-dim); }
+  .badge-missing  { background: rgba(232,64,64,.1);   color: var(--red);   border: 1px solid var(--red-dim); }
+  .badge-na       { background: var(--bg-raised);      color: var(--text-muted); border: 1px solid var(--border); }
+
+  /* Audio device selector */
+  .device-list {
+    background: var(--bg-deep); border: 1px solid var(--border);
+    border-radius: 3px; overflow: hidden; margin-bottom: 8px;
+  }
+  .device-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
+  }
+  .device-item:last-child { border-bottom: none; }
+  .device-item:hover { background: var(--bg-raised); }
+  .device-item.selected { background: rgba(232,130,10,.1); border-left: 2px solid var(--orange); }
+  .device-item-name { font-size: 12px; font-weight: 600; flex: 1; }
+  .device-item-ch { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--text-muted); }
+
+  /* Progress / status log */
+  .wiz-log {
+    background: var(--bg-deep); border: 1px solid var(--border);
+    border-radius: 3px; padding: 12px 14px;
+    font-family: 'Share Tech Mono', monospace; font-size: 11px;
+    line-height: 1.8; max-height: 200px; overflow-y: auto;
+    color: var(--text-dim);
+  }
+  .wiz-log .log-ok   { color: var(--green); }
+  .wiz-log .log-err  { color: var(--red); }
+  .wiz-log .log-warn { color: var(--amber); }
+  .wiz-log .log-info { color: var(--text-primary); }
+
+  /* Footer nav */
+  .wizard-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .wiz-nav-btn {
+    padding: 8px 20px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 12px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; border-radius: 2px;
+    cursor: pointer; transition: all .15s;
+  }
+  .wiz-btn-back {
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .wiz-btn-back:hover { color: var(--text-primary); border-color: var(--border-hi); }
+  .wiz-btn-next {
+    background: var(--orange-dim); color: #fff;
+    border: 1px solid var(--orange);
+    box-shadow: 0 0 14px var(--orange-glow);
+  }
+  .wiz-btn-next:hover { background: var(--orange); }
+  .wiz-btn-next:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+  .wiz-btn-finish {
+    background: var(--green-dim); color: #fff;
+    border: 1px solid var(--green);
+    box-shadow: 0 0 14px rgba(61,220,132,.2);
+  }
+  .wiz-btn-finish:hover { background: #2a9c60; }
+
+  /* Spinner */
+  .spinner {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid var(--border); border-top-color: var(--orange);
+    border-radius: 50%; animation: spin .6s linear infinite;
+    margin-right: 6px; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Restart notice */
+  .restart-notice {
+    background: rgba(232,130,10,.1); border: 1px solid var(--orange-dim);
+    border-radius: 3px; padding: 12px 14px; margin-top: 12px;
+    font-size: 12px; color: var(--amber); line-height: 1.6;
+    display: none;
+  }
+  .restart-notice.visible { display: block; }
+</style>
+
+<!-- Modal HTML -->
+<div class="wizard-overlay" id="wizardOverlay">
+  <div class="wizard-modal">
+
+    <div class="wizard-header">
+      <div class="wizard-title">⚙ Setup Wizard</div>
+      <button class="wizard-close" onclick="closeWizard()">✕</button>
+    </div>
+
+    <!-- Step tabs -->
+    <div class="wizard-steps">
+      <div class="wizard-step-tab active" id="tab-0"><span class="step-num">1</span>Detect</div>
+      <div class="wizard-step-tab"        id="tab-1"><span class="step-num">2</span>Network</div>
+      <div class="wizard-step-tab"        id="tab-2"><span class="step-num">3</span>Audio</div>
+      <div class="wizard-step-tab"        id="tab-3"><span class="step-num">4</span>Recording</div>
+      <div class="wizard-step-tab"        id="tab-4"><span class="step-num">5</span>Apply</div>
+    </div>
+
+    <div class="wizard-body">
+
+      <!-- ── Step 0: Detect ── -->
+      <div class="wizard-panel active" id="panel-0">
+        <div class="wiz-section-label">System Detection</div>
+        <div class="detect-grid" id="detectGrid">
+          <div class="detect-card">
+            <div class="detect-card-label">Status</div>
+            <div class="detect-card-val" id="det-status"><span class="spinner"></span>Scanning…</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">Platform</div>
+            <div class="detect-card-val" id="det-platform">—</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">/dev/snd Devices</div>
+            <div class="detect-card-val" id="det-snd">—</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">Audio Inputs</div>
+            <div class="detect-card-val" id="det-audio">—</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">Docker Socket</div>
+            <div class="detect-card-val" id="det-docker">—</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">Audio Group</div>
+            <div class="detect-card-val" id="det-audiogrp">—</div>
+          </div>
+        </div>
+        <div class="wiz-section-label">Current Configuration</div>
+        <div class="detect-grid" id="currentCfgGrid">
+          <div class="detect-card">
+            <div class="detect-card-label">Wing IP</div>
+            <div class="detect-card-val" id="cfg-ip">—</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">OSC Port</div>
+            <div class="detect-card-val" id="cfg-port">—</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">Sample Rate</div>
+            <div class="detect-card-val" id="cfg-sr">—</div>
+          </div>
+          <div class="detect-card">
+            <div class="detect-card-label">Bit Depth</div>
+            <div class="detect-card-val" id="cfg-bd">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Step 1: Network ── -->
+      <div class="wizard-panel" id="panel-1">
+        <div class="wiz-section-label">Behringer Wing Network Settings</div>
+        <div class="wiz-row">
+          <div class="wiz-label">Wing IP Address</div>
+          <input class="wiz-input" id="wiz-ip" value="192.168.1.100" placeholder="e.g. 192.168.1.100">
+        </div>
+        <div class="wiz-row">
+          <div class="wiz-label">OSC Port (Wing) <span style="color:var(--amber);font-size:9px">fixed 2223</span></div>
+          <input class="wiz-input" id="wiz-port" value="2223" placeholder="2223" readonly title="Wing OSC port is always 2223">
+        </div>
+        <div class="wiz-row">
+          <div class="wiz-label">Local Listen Port</div>
+          <input class="wiz-input" id="wiz-localport" value="2224" placeholder="2224">
+        </div>
+        <div class="wiz-test-row">
+          <button class="wiz-test-btn" id="oscTestBtn" onclick="testOSC()">▶ Test Connection</button>
+          <div class="wiz-test-result" id="oscTestResult">Enter IP above then click Test</div>
+        </div>
+        <div class="wiz-section-label" style="margin-top:18px">Wing Setup Reminder</div>
+        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:3px;padding:12px 14px;font-size:12px;color:var(--text-dim);line-height:1.8;">
+          On the Wing console:<br>
+          <span style="color:var(--orange)">SETUP → Network → Remote Control</span><br>
+          • Enable <b style="color:var(--text-primary)">OSC</b><br>
+          • Wing OSC port is <b style="color:var(--amber)">fixed at 2223</b> — do not change<br>
+          • Set Remote IP to <b style="color:var(--text-primary)" id="wiz-remind-ip">this server's IP</b><br>
+          • Set Remote Port to <b style="color:var(--text-primary)" id="wiz-remind-port">2224</b><br>
+          <span style="font-size:10px;color:var(--text-muted)">(Remote Port = where Wing sends subscription events)</span>
+        </div>
+      </div>
+
+      <!-- ── Step 2: Audio ── -->
+      <div class="wizard-panel" id="panel-2">
+        <div class="wiz-section-label">Audio Device Passthrough</div>
+
+        <div class="wiz-toggle-row">
+          <label class="wiz-toggle">
+            <input type="checkbox" id="tog-audio" onchange="onAudioToggle()">
+            <span class="wiz-toggle-slider"></span>
+          </label>
+          <div class="wiz-toggle-info">
+            <div class="wiz-toggle-title">
+              Enable /dev/snd Passthrough
+              <span class="wiz-toggle-badge" id="snd-badge">—</span>
+            </div>
+            <div class="wiz-toggle-desc">
+              Passes the host's ALSA audio devices into the container so the Wing's USB
+              audio can be recorded. Edits <code>docker-compose.yml</code> and restarts
+              the container. <b style="color:var(--text-primary)">You can enable this now
+              even if the Wing isn't plugged in yet</b> — it will be ready when you connect.
+            </div>
+          </div>
+        </div>
+
+        <div class="wiz-section-label" style="display:flex;align-items:center;justify-content:space-between;">
+          Detected Audio Input Devices
+          <button class="wiz-test-btn" style="font-size:9px;padding:3px 10px;" onclick="rescanAudio()">↻ Rescan</button>
+        </div>
+        <div class="device-list" id="deviceList">
+          <div class="device-item"><div class="device-item-name" style="color:var(--text-muted)">Scanning…</div></div>
+        </div>
+
+        <div id="no-snd-warning" style="display:none;background:rgba(245,166,35,.08);border:1px solid #a07010;border-radius:3px;padding:10px 14px;font-size:11px;color:var(--amber);line-height:1.6;">
+          ⚠ <b>/dev/snd not detected yet</b> — this is normal if the Wing USB cable isn't connected.<br><br>
+          <b style="color:var(--text-primary)">You can still enable passthrough now.</b> The setting will be
+          written to <code>docker-compose.yml</code> and activated on next container start. Once you connect
+          the Wing via USB and restart the container, audio devices will appear here.<br><br>
+          Common reasons /dev/snd is absent:<br>
+          • Wing USB cable not yet connected to this machine<br>
+          • Running on WSL1 (use WSL2 + usbipd) or macOS Docker Desktop<br>
+          • ALSA drivers not loaded — try: <code>sudo modprobe snd-usb-audio</code>
+        </div>
+      </div>
+
+      <!-- ── Step 3: Recording ── -->
+      <div class="wizard-panel" id="panel-3">
+        <div class="wiz-section-label">Recording Format</div>
+        <div class="wiz-row">
+          <div class="wiz-label">Sample Rate</div>
+          <select class="wiz-select" id="wiz-sr">
+            <option value="48000">48 000 Hz (Standard)</option>
+            <option value="96000">96 000 Hz (High Res)</option>
+          </select>
+        </div>
+        <div class="wiz-row">
+          <div class="wiz-label">Bit Depth</div>
+          <select class="wiz-select" id="wiz-bd">
+            <option value="32" selected>32-bit Float (Recommended)</option>
+            <option value="24">24-bit PCM</option>
+            <option value="16">16-bit PCM</option>
+          </select>
+        </div>
+        <div class="wiz-row">
+          <div class="wiz-label">Record Channels</div>
+          <select class="wiz-select" id="wiz-ch">
+            <option value="2">2 (Stereo)</option>
+            <option value="8">8</option>
+            <option value="16">16</option>
+            <option value="32" selected>32 (Full Wing)</option>
+          </select>
+        </div>
+        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:3px;padding:12px 14px;margin-top:8px;">
+          <div class="wiz-section-label" style="margin:0 0 6px">Estimated Disk Usage</div>
+          <div id="diskEstimate" style="font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--cyan);">
+            — GB / hour
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Step 4: Apply ── -->
+      <div class="wizard-panel" id="panel-4">
+        <div class="wiz-section-label">Applying Configuration</div>
+        <div class="wiz-log" id="applyLog">Waiting to apply…</div>
+
+        <div class="restart-notice" id="restartNotice">
+          <b>🔄 Container Restart Required</b><br>
+          Audio device passthrough was changed. The container needs to restart
+          to apply the new docker-compose.yml settings.<br><br>
+          <button class="wiz-test-btn" onclick="triggerRestart()" id="restartBtn">
+            ⟳ Restart Container Now
+          </button>
+          &nbsp;
+          <span style="font-size:10px;color:var(--text-muted)">
+            Or run: <code>docker compose restart wing-remote</code>
+          </span>
+        </div>
+      </div>
+
+    </div><!-- /wizard-body -->
+
+    <div class="wizard-footer">
+      <button class="wiz-nav-btn wiz-btn-back" id="wizBack" onclick="wizNav(-1)">← Back</button>
+      <div style="font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--text-muted)" id="wizStepLabel">Step 1 of 5</div>
+      <button class="wiz-nav-btn wiz-btn-next" id="wizNext" onclick="wizNav(1)">Next →</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════
+// SETUP WIZARD JS
+// ════════════════════════════════════════════════════════════════════════
+const WIZ = {
+  step: 0,
+  totalSteps: 5,
+  env: null,           // result from /api/setup/detect
+  oscTested: false,
+  oscOk: false,
+  audioToggleUserSet: false,  // true once user has manually touched the toggle
+};
+
+// Open / close
+function openWizard() {
+  document.getElementById('wizardOverlay').classList.add('visible');
+  if (!WIZ.env) runDetection();
+}
+function closeWizard() {
+  document.getElementById('wizardOverlay').classList.remove('visible');
+}
+
+// Auto-launch if Wing IP is still default or first visit
+async function checkAndLaunchWizard() {
+  try {
+    const r = await fetch('/api/setup/detect');
+    const data = await r.json();
+    WIZ.env = data;
+    const ip = data.current_env?.WING_IP || '192.168.1.100';
+    // Launch wizard if still on default IP or no audio configured
+    if (ip === '192.168.1.100' || !data.compose_audio_enabled) {
+      openWizard();
+      populateDetection(data);
+    }
+  } catch(e) {
+    // Server not yet reachable (demo mode) — don't open wizard
+  }
+}
+
+// Nav button: add to topbar
+document.querySelector('.topbar-nav').insertAdjacentHTML('beforeend',
+  '<button class="nav-btn" onclick="openWizard()" style="color:var(--amber)">⚙ Setup</button>'
+);
+
+// ── Detection ─────────────────────────────────────────────────────────
+async function runDetection() {
+  setDetCard('det-status', 'Scanning…', '');
+  try {
+    const r = await fetch('/api/setup/detect');
+    WIZ.env = await r.json();
+    populateDetection(WIZ.env);
+  } catch(e) {
+    setDetCard('det-status', 'Server unreachable', 'err');
+  }
+}
+
+function populateDetection(d) {
+  setDetCard('det-status', 'Complete', 'ok');
+  setDetCard('det-platform', d.platform || 'linux', d.platform === 'wsl' ? 'warn' : 'ok');
+  setDetCard('det-snd',
+    d.dev_snd_exists ? `${d.dev_snd_devices.length} devices` : 'Not found',
+    d.dev_snd_exists ? 'ok' : 'warn');
+  setDetCard('det-audio',
+    d.audio_devices.length > 0 ? `${d.audio_devices.length} input(s)` : 'None found',
+    d.audio_devices.length > 0 ? 'ok' : 'warn');
+  setDetCard('det-docker', d.docker_socket ? 'Available' : 'Not mounted', d.docker_socket ? 'ok' : 'warn');
+  setDetCard('det-audiogrp', d.audio_group ? 'In group' : 'Not in group', d.audio_group ? 'ok' : 'warn');
+
+  const env = d.current_env || {};
+  setDetCard('cfg-ip',   env.WING_IP       || '192.168.1.100', '');
+  setDetCard('cfg-port', env.WING_OSC_PORT || '2222', '');
+  setDetCard('cfg-sr',   env.SAMPLE_RATE   || '48000', '');
+  setDetCard('cfg-bd',   (env.BIT_DEPTH    || '32') + '-bit', '');
+
+  // Pre-fill network step
+  document.getElementById('wiz-ip').value        = env.WING_IP       || '192.168.1.100';
+  document.getElementById('wiz-port').value       = env.WING_OSC_PORT || '2223';
+  document.getElementById('wiz-localport').value  = env.LOCAL_OSC_PORT|| '2224';
+
+  // Pre-fill recording step
+  const srEl = document.getElementById('wiz-sr');
+  if (env.SAMPLE_RATE) srEl.value = env.SAMPLE_RATE;
+  const bdEl = document.getElementById('wiz-bd');
+  if (env.BIT_DEPTH) bdEl.value = env.BIT_DEPTH;
+  const chEl = document.getElementById('wiz-ch');
+  if (env.RECORD_CHANNELS) chEl.value = env.RECORD_CHANNELS;
+
+  // Audio step
+  populateAudioStep(d);
+  updateDiskEstimate();
+}
+
+function setDetCard(id, text, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'detect-card-val' + (cls ? ' ' + cls : '');
+}
+
+// ── Audio step ────────────────────────────────────────────────────────
+function populateAudioStep(d) {
+  const tog   = document.getElementById('tog-audio');
+  const badge = document.getElementById('snd-badge');
+  const warn  = document.getElementById('no-snd-warning');
+  const list  = document.getElementById('deviceList');
+
+  // Always enable the toggle — user can configure passthrough even before
+  // the Wing USB is connected. /dev/snd just tells us the current state.
+  tog.disabled = false;
+
+  if (d.dev_snd_exists) {
+    badge.textContent  = 'DETECTED';
+    badge.className    = 'wiz-toggle-badge badge-detected';
+    warn.style.display = 'none';
+  } else {
+    badge.textContent  = 'NOT YET';
+    badge.className    = 'wiz-toggle-badge badge-na';
+    warn.style.display = 'block';
+  }
+
+  // Only set the toggle state on the FIRST population (initial detect).
+  // On rescan we preserve whatever the user has chosen — indicated by
+  // WIZ.audioToggleUserSet being true.
+  if (!WIZ.audioToggleUserSet) {
+    tog.checked = d.compose_audio_enabled;
+  }
+
+  // Device list
+  if (d.audio_devices.length === 0) {
+    list.innerHTML = `
+      <div class="device-item">
+        <div class="device-item-name" style="color:var(--text-muted)">
+          No audio input devices detected
+        </div>
+        <div class="device-item-ch">Connect Wing via USB, then click ↻ Rescan</div>
+      </div>`;
+  } else {
+    list.innerHTML = d.audio_devices.map((dev, i) => `
+      <div class="device-item ${i===0?'selected':''}" onclick="selectDevice(this,${dev.index})">
+        <div class="device-item-name">${dev.name}</div>
+        <div class="device-item-ch">${dev.max_input_ch}ch · ${dev.default_sr/1000}kHz</div>
+      </div>
+    `).join('');
+  }
+}
+
+async function rescanAudio() {
+  const list  = document.getElementById('deviceList');
+  const badge = document.getElementById('snd-badge');
+  list.innerHTML = '<div class="device-item"><div class="device-item-name" style="color:var(--text-muted)"><span class="spinner"></span> Scanning…</div></div>';
+  badge.textContent = '…';
+  badge.className   = 'wiz-toggle-badge badge-na';
+  try {
+    const r    = await fetch('/api/setup/detect');
+    const data = await r.json();
+    WIZ.env    = data;
+    populateAudioStep(data);
+    // Update the detection step cards too
+    populateDetection(data);
+  } catch(e) {
+    list.innerHTML = '<div class="device-item"><div class="device-item-name" style="color:var(--red)">Rescan failed — server unreachable</div></div>';
+  }
+}
+
+function selectDevice(el, idx) {
+  document.querySelectorAll('.device-item').forEach(d => d.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+function onAudioToggle() {
+  // Mark that the user has explicitly set this — rescan won't override it
+  WIZ.audioToggleUserSet = true;
+  updateDiskEstimate();
+}
+
+// ── OSC Test ──────────────────────────────────────────────────────────
+async function testOSC() {
+  const ip   = document.getElementById('wiz-ip').value.trim();
+  const port = parseInt(document.getElementById('wiz-port').value) || 2222;
+  const btn  = document.getElementById('oscTestBtn');
+  const res  = document.getElementById('oscTestResult');
+
+  btn.disabled = true;
+  res.className = 'wiz-test-result';
+  res.innerHTML = '<span class="spinner"></span>Testing…';
+
+  // Update reminder
+  document.getElementById('wiz-remind-ip').textContent = ip;
+  document.getElementById('wiz-remind-port').textContent =
+    document.getElementById('wiz-localport').value || '2223';
+
+  try {
+    const r = await fetch('/api/setup/test-osc', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ip, port}),
+    });
+    const data = await r.json();
+    WIZ.oscTested = true;
+    WIZ.oscOk = data.success;
+    res.textContent = data.message;
+    res.className   = 'wiz-test-result ' + (data.success ? 'ok' : 'err');
+  } catch(e) {
+    res.textContent = 'Could not reach backend server';
+    res.className   = 'wiz-test-result err';
+  }
+  btn.disabled = false;
+}
+
+// ── Disk estimate ─────────────────────────────────────────────────────
+function updateDiskEstimate() {
+  const sr  = parseInt(document.getElementById('wiz-sr')?.value  || 48000);
+  const bd  = parseInt(document.getElementById('wiz-bd')?.value  || 32);
+  const ch  = parseInt(document.getElementById('wiz-ch')?.value  || 32);
+  const bytesPerHour = sr * (bd / 8) * ch * 3600;
+  const gb = (bytesPerHour / 1e9).toFixed(1);
+  const el = document.getElementById('diskEstimate');
+  if (el) el.textContent = `~${gb} GB / hour`;
+}
+document.getElementById('wiz-sr')?.addEventListener('change', updateDiskEstimate);
+document.getElementById('wiz-bd')?.addEventListener('change', updateDiskEstimate);
+document.getElementById('wiz-ch')?.addEventListener('change', updateDiskEstimate);
+
+// ── Apply ─────────────────────────────────────────────────────────────
+async function applyConfig() {
+  const log = document.getElementById('applyLog');
+  const restart = document.getElementById('restartNotice');
+  log.innerHTML = '';
+
+  function logLine(text, cls='') {
+    log.innerHTML += `<div class="${cls?'log-'+cls:''}">${text}</div>`;
+    log.scrollTop = log.scrollHeight;
+  }
+
+  logLine('Starting configuration…', 'info');
+
+  const payload = {
+    wing_ip:                document.getElementById('wiz-ip').value.trim(),
+    wing_osc_port:          parseInt(document.getElementById('wiz-port').value) || 2222,
+    local_osc_port:         parseInt(document.getElementById('wiz-localport').value) || 2223,
+    sample_rate:            parseInt(document.getElementById('wiz-sr').value) || 48000,
+    bit_depth:              parseInt(document.getElementById('wiz-bd').value) || 32,
+    record_channels:        parseInt(document.getElementById('wiz-ch').value) || 32,
+    enable_audio_passthrough: document.getElementById('tog-audio').checked,
+  };
+
+  logLine(`Wing IP → ${payload.wing_ip}:${payload.wing_osc_port}`);
+  logLine(`Sample rate → ${payload.sample_rate} Hz / ${payload.bit_depth}-bit`);
+  logLine(`Record channels → ${payload.record_channels}`);
+  logLine(`Audio passthrough → ${payload.enable_audio_passthrough ? 'ENABLED' : 'DISABLED'}`);
+
+  try {
+    const r = await fetch('/api/setup/apply', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+
+    if (data.env?.success) {
+      logLine('✓ .env configuration written', 'ok');
+    } else {
+      logLine(`✗ .env write failed: ${data.env?.message}`, 'err');
+    }
+
+    if (data.audio?.success) {
+      const changed = data.audio.changed;
+      logLine(`✓ docker-compose.yml audio passthrough ${changed ? 'updated' : 'unchanged'}`, 'ok');
+    } else {
+      logLine(`✗ docker-compose.yml update failed: ${data.audio?.message}`, 'err');
+    }
+
+    if (data.osc_client?.success) {
+      logLine(`✓ Live OSC client updated → ${payload.wing_ip}:${payload.wing_osc_port}`, 'ok');
+    } else {
+      logLine(`⚠ OSC client update: ${data.osc_client?.message}`, 'warn');
+    }
+
+    if (data.restart_required) {
+      logLine('⚠ Container restart required to activate audio changes', 'warn');
+      restart.classList.add('visible');
+    } else {
+      logLine('✓ All changes applied. No restart needed.', 'ok');
+      logLine('Setup complete! You can close this wizard.', 'info');
+    }
+
+    // Update topbar connection fields
+    document.getElementById('wingIP').value   = payload.wing_ip;
+    document.getElementById('wingPort').value = payload.wing_osc_port;
+
+  } catch(e) {
+    logLine(`✗ Network error: ${e.message}`, 'err');
+    logLine('Make sure the backend server is running.', 'warn');
+  }
+}
+
+async function triggerRestart() {
+  const btn = document.getElementById('restartBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Restarting…';
+
+  try {
+    const r = await fetch('/api/setup/restart', { method: 'POST' });
+    const data = await r.json();
+    const log = document.getElementById('applyLog');
+    if (data.success) {
+      log.innerHTML += '<div class="log-ok">✓ Restart initiated — page will reload in 8 seconds…</div>';
+      setTimeout(() => location.reload(), 8000);
+    } else {
+      log.innerHTML += `<div class="log-warn">⚠ Auto-restart failed: ${data.message}</div>`;
+      log.innerHTML += `<div class="log-info">Run manually: <code>docker compose restart wing-remote</code></div>`;
+      btn.disabled = false;
+      btn.textContent = '⟳ Retry Restart';
+    }
+  } catch(e) {
+    document.getElementById('applyLog').innerHTML +=
+      '<div class="log-warn">⚠ Could not contact server — the restart may be in progress. Reloading…</div>';
+    setTimeout(() => location.reload(), 5000);
+  }
+}
+
+// ── Step navigation ────────────────────────────────────────────────────
+function wizNav(dir) {
+  const newStep = WIZ.step + dir;
+  if (newStep < 0 || newStep >= WIZ.totalSteps) return;
+
+  // Trigger apply when entering step 4
+  if (newStep === 4) applyConfig();
+
+  // Leave current
+  document.getElementById(`panel-${WIZ.step}`).classList.remove('active');
+  document.getElementById(`tab-${WIZ.step}`).classList.remove('active');
+  document.getElementById(`tab-${WIZ.step}`).classList.add('done');
+
+  WIZ.step = newStep;
+
+  document.getElementById(`panel-${WIZ.step}`).classList.add('active');
+  document.getElementById(`tab-${WIZ.step}`).classList.add('active');
+  document.getElementById(`tab-${WIZ.step}`).classList.remove('done');
+
+  // Footer
+  document.getElementById('wizBack').style.visibility = WIZ.step === 0 ? 'hidden' : 'visible';
+  document.getElementById('wizStepLabel').textContent = `Step ${WIZ.step+1} of ${WIZ.totalSteps}`;
+
+  const nextBtn = document.getElementById('wizNext');
+  if (WIZ.step === WIZ.totalSteps - 1) {
+    nextBtn.textContent = 'Close ✓';
+    nextBtn.className = 'wiz-nav-btn wiz-btn-finish';
+    nextBtn.onclick = closeWizard;
+  } else {
+    nextBtn.textContent = 'Next →';
+    nextBtn.className = 'wiz-nav-btn wiz-btn-next';
+    nextBtn.onclick = () => wizNav(1);
+  }
+}
+
+// Init footer state
+document.getElementById('wizBack').style.visibility = 'hidden';
+</script>
+</body>
+</html>
