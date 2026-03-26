@@ -109,14 +109,33 @@ logging.basicConfig(
 log = logging.getLogger("wing-remote")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-WING_IP            = os.getenv("WING_IP", "192.168.1.100")
-WING_OSC_PORT      = int(os.getenv("WING_OSC_PORT", "2223"))   # Wing always uses 2223
-LOCAL_OSC_PORT     = int(os.getenv("LOCAL_OSC_PORT", "2224"))   # port WE listen on
-SAMPLE_RATE        = int(os.getenv("SAMPLE_RATE", "48000"))
-BIT_DEPTH          = int(os.getenv("BIT_DEPTH", "32"))
-CHANNELS           = int(os.getenv("RECORD_CHANNELS", "32"))
-RECORDINGS_DIR     = Path(os.getenv("RECORDINGS_DIR", "/recordings"))
+# Static config — read once at startup from environment / .env file
+LOCAL_OSC_PORT = int(os.getenv("LOCAL_OSC_PORT", "2224"))
+SAMPLE_RATE    = int(os.getenv("SAMPLE_RATE", "48000"))
+BIT_DEPTH      = int(os.getenv("BIT_DEPTH", "32"))
+CHANNELS       = int(os.getenv("RECORD_CHANNELS", "32"))
+RECORDINGS_DIR = Path(os.getenv("RECORDINGS_DIR", "/recordings"))
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+METER_RENEW_SEC    = 4.0
+SUBSCRIPTION_INTERVAL = 8.0
+WING_SUBSCRIBE     = "/*S"
+WING_BINARY_PORT   = 2222
+
+# Mutable Wing target — updated live by setup_apply without needing restart
+_wing_ip   = os.getenv("WING_IP",       "192.168.1.100")
+_wing_port = int(os.getenv("WING_OSC_PORT", "2223"))
+
+def WING_IP() -> str:
+    return _wing_ip
+
+def WING_OSC_PORT() -> int:
+    return _wing_port
+
+def set_wing_target(ip: str, port: int):
+    global _wing_ip, _wing_port
+    _wing_ip   = ip
+    _wing_port = port
+    log.info(f"Wing target updated → {ip}:{port}")
 
 # Wing subscription keepalive — must be renewed every <10 seconds
 SUBSCRIPTION_INTERVAL = 8.0
@@ -140,43 +159,37 @@ class AppState:
         self.record_start_ts  = 0.0
         self.armed_channels: set = set()
 
+        def _ch_defaults(i):
+            return {
+                "fader": 0.75, "mute": False, "solo": False, "pan": 0.0,
+                "name": f"CH {i}",
+                "eq":   {"on": False, "bands": [{"g":0,"f":1000,"q":0.7}]*6},
+                "dyn":  {"on": False, "thr": -20.0, "ratio": "4.0", "att": 10.0, "rel": 100.0,
+                         "knee": 0, "gain": 0.0},
+                "gate": {"on": False, "thr": -40.0, "range": 60.0, "att": 0.0, "rel": 100.0},
+                "sends": {str(b): {"on": False, "lvl": 0.75} for b in range(1, 17)},
+            }
+        def _bus_defaults(i):
+            return {
+                "fader": 0.75, "mute": False, "solo": False, "pan": 0.0,
+                "name": f"BUS {i}",
+                "eq":   {"on": False, "bands": [{"g":0,"f":1000,"q":0.7}]*8},
+                "dyn":  {"on": False, "thr": -20.0, "ratio": 4.0, "att": 10.0, "rel": 100.0},
+            }
+
         # Mixer mirror — all indices 1-based matching Wing numbering
         self.mixer: dict = {
-            # channels: 1..40
-            "channels": {
-                str(i): {"fader": 0.75, "mute": False, "solo": False, "pan": 0.0, "name": f"CH {i}"}
-                for i in range(1, 41)
-            },
-            # aux inputs: 1..8
-            "aux": {
-                str(i): {"fader": 0.75, "mute": False, "pan": 0.0, "name": f"AUX {i}"}
-                for i in range(1, 9)
-            },
-            # mix buses: 1..16
-            "buses": {
-                str(i): {"fader": 0.75, "mute": False, "pan": 0.0, "name": f"BUS {i}"}
-                for i in range(1, 17)
-            },
-            # mains: 1..4  (main 1 = L/R stereo)
-            "main": {
-                str(i): {"fader": 0.75, "mute": False, "pan": 0.0, "name": f"MAIN {i}"}
-                for i in range(1, 5)
-            },
-            # matrix: 1..8
-            "matrix": {
-                str(i): {"fader": 0.75, "mute": False, "pan": 0.0, "name": f"MTX {i}"}
-                for i in range(1, 9)
-            },
-            # DCAs: 1..16
-            "dca": {
-                str(i): {"fader": 0.75, "mute": False, "name": f"DCA {i}"}
-                for i in range(1, 17)
-            },
-            # Mute groups: 1..8
-            "mgrp": {
-                str(i): {"mute": False, "name": f"MG {i}"}
-                for i in range(1, 9)
-            },
+            "channels": {str(i): _ch_defaults(i)  for i in range(1, 41)},
+            "aux":      {str(i): {**_ch_defaults(i), "name": f"AUX {i}"} for i in range(1, 9)},
+            "buses":    {str(i): _bus_defaults(i)  for i in range(1, 17)},
+            "main":     {str(i): {"fader": 0.75, "mute": False, "pan": 0.0, "name": f"MAIN {i}",
+                                  "eq": {"on": False, "bands": [{"g":0,"f":1000,"q":0.7}]*8},
+                                  "dyn": {"on": False, "thr": -20.0, "ratio": 4.0}} for i in range(1, 5)},
+            "matrix":   {str(i): {"fader": 0.75, "mute": False, "pan": 0.0, "name": f"MTX {i}"}
+                         for i in range(1, 9)},
+            "dca":      {str(i): {"fader": 0.75, "mute": False, "name": f"DCA {i}"}
+                         for i in range(1, 17)},
+            "mgrp":     {str(i): {"mute": False, "name": f"MG {i}"} for i in range(1, 9)},
         }
 
         self.ws_clients: list = []
@@ -188,11 +201,11 @@ app_state = AppState()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Starting WING Remote backend…")
-    log.info(f"Wing target: {WING_IP}:{WING_OSC_PORT}  |  Local OSC listen: {LOCAL_OSC_PORT}")
+    log.info(f"Wing target: {WING_IP()}:{WING_OSC_PORT()}  |  Local OSC listen: {LOCAL_OSC_PORT}")
 
     try:
-        app_state.wing_client = SimpleUDPClient(WING_IP, WING_OSC_PORT)
-        log.info(f"OSC client ready → {WING_IP}:{WING_OSC_PORT}")
+        app_state.wing_client = SimpleUDPClient(WING_IP(), WING_OSC_PORT())
+        log.info(f"OSC client ready → {WING_IP()}:{WING_OSC_PORT()}")
     except Exception as e:
         log.warning(f"Could not create OSC client: {e}")
 
@@ -259,7 +272,7 @@ async def wing_probe_loop():
             try:
                 from backend.setup import test_osc_connection
                 result = await asyncio.wait_for(
-                    test_osc_connection(WING_IP, WING_OSC_PORT, timeout=2.0),
+                    test_osc_connection(WING_IP(), WING_OSC_PORT(), timeout=2.0),
                     timeout=3.0
                 )
                 connected = result.get("success", False)
@@ -274,16 +287,16 @@ async def wing_probe_loop():
             status_msg = {
                 "type":      "wing_status",
                 "connected": connected,
-                "wing_ip":   WING_IP,
-                "wing_port": WING_OSC_PORT,
+                "wing_ip":   WING_IP(),
+                "wing_port": WING_OSC_PORT(),
             }
             await broadcast(status_msg)
             if connected:
-                log.info(f"Wing connected at {WING_IP}:{WING_OSC_PORT}")
+                log.info(f"Wing connected at {WING_IP()}:{WING_OSC_PORT()}")
                 # Trigger bulk query now that Wing is reachable
                 asyncio.create_task(bulk_query_wing())
             else:
-                log.warning(f"Wing not reachable at {WING_IP}:{WING_OSC_PORT}")
+                log.warning(f"Wing not reachable at {WING_IP()}:{WING_OSC_PORT()}")
 
         await asyncio.sleep(5.0 if not connected else 15.0)
 
@@ -405,6 +418,26 @@ def build_dispatcher() -> Dispatcher:
 
     # Mute groups 1..8
     d.map("/mgrp/*/mute", handle_mgrp_mute)
+
+    # EQ (channels, aux, buses, mains)
+    d.map("/ch/*/eq/*",   handle_ch_eq)
+    d.map("/aux/*/eq/*",  handle_aux_eq)
+    d.map("/bus/*/eq/*",  handle_bus_eq)
+    d.map("/main/*/eq/*", handle_main_eq)
+
+    # Dynamics / compressor
+    d.map("/ch/*/dyn/*",   handle_ch_dyn)
+    d.map("/aux/*/dyn/*",  handle_aux_dyn)
+    d.map("/bus/*/dyn/*",  handle_bus_dyn)
+    d.map("/main/*/dyn/*", handle_main_dyn)
+
+    # Gate / expander (channels and aux only)
+    d.map("/ch/*/gate/*",  handle_ch_gate)
+    d.map("/aux/*/gate/*", handle_aux_gate)
+
+    # Bus sends
+    d.map("/ch/*/send/*/*",  handle_ch_send)
+    d.map("/aux/*/send/*/*", handle_aux_send)
 
     d.set_default_handler(osc_default_handler)
     return d
@@ -639,6 +672,156 @@ def handle_mgrp_mute(address, *args):
     app_state.mixer["mgrp"].setdefault(n, {})["mute"] = muted
     asyncio.create_task(broadcast({"type": "mute", "strip": "mgrp", "ch": n, "value": muted}))
 
+# ── EQ handlers ──────────────────────────────────────────────────────────────
+# Wing EQ paths: /ch/{n}/eq/on, /ch/{n}/eq/{1-4}g, /ch/{n}/eq/{1-4}f, /ch/{n}/eq/{1-4}q
+# Same pattern for /aux/, /bus/, /main/
+
+def _eq_handler(address: str, section: str, store_key: str, args):
+    """Generic EQ parameter handler. address e.g. /ch/1/eq/1g"""
+    parts = address.split("/")
+    try:
+        n = str(int(parts[2]))
+    except (IndexError, ValueError):
+        return
+    param = parts[4] if len(parts) > 4 else ""
+    store = app_state.mixer.get(section, {}).get(n, {})
+    eq    = store.setdefault("eq", {"on": False, "bands": []})
+
+    if param == "on":
+        val = bool(parse_wing_int(args))
+        eq["on"] = val
+        asyncio.create_task(broadcast({"type": "eq_on", "strip": store_key, "ch": n, "value": val}))
+    elif len(param) >= 2 and param[-1] in "gfq":
+        try:
+            band_num = int(param[:-1])  # e.g. "1g" → 1
+            attr     = param[-1]        # g, f, or q
+            val      = parse_wing_float(args) if attr == "f" else float(args[0]) if args else 0.0
+            # Ensure bands list is long enough
+            while len(eq["bands"]) < band_num:
+                eq["bands"].append({"g": 0, "f": 1000, "q": 0.7})
+            eq["bands"][band_num - 1][attr] = val
+            asyncio.create_task(broadcast({
+                "type": "eq_band", "strip": store_key, "ch": n,
+                "band": band_num, "attr": attr, "value": val
+            }))
+        except (ValueError, IndexError):
+            pass
+
+def handle_ch_eq(address, *args):   _eq_handler(address, "channels", "ch",   args)
+def handle_aux_eq(address, *args):  _eq_handler(address, "aux",      "aux",  args)
+def handle_bus_eq(address, *args):  _eq_handler(address, "buses",    "bus",  args)
+def handle_main_eq(address, *args): _eq_handler(address, "main",     "main", args)
+
+
+# ── Dynamics handlers ─────────────────────────────────────────────────────────
+# Wing dyn paths: /ch/{n}/dyn/on, /thr, /ratio, /att, /hld, /rel, /gain
+
+def _dyn_handler(address: str, section: str, store_key: str, args):
+    parts = address.split("/")
+    try:
+        n = str(int(parts[2]))
+    except (IndexError, ValueError):
+        return
+    param = parts[4] if len(parts) > 4 else ""
+    store = app_state.mixer.get(section, {}).get(n, {})
+    dyn   = store.setdefault("dyn", {"on": False})
+
+    def float_val():
+        return float(args[0]) if args else 0.0
+
+    updated = True
+    if param == "on":
+        dyn["on"] = bool(parse_wing_int(args))
+    elif param == "thr":
+        dyn["thr"] = float_val()
+    elif param == "ratio":
+        dyn["ratio"] = str(args[0]) if args else "4.0"
+    elif param == "att":
+        dyn["att"] = float_val()
+    elif param in ("rel", "hld"):
+        dyn[param] = float_val()
+    elif param == "gain":
+        dyn["gain"] = float_val()
+    elif param == "knee":
+        dyn["knee"] = parse_wing_int(args)
+    else:
+        updated = False
+
+    if updated:
+        asyncio.create_task(broadcast({
+            "type": "dyn", "strip": store_key, "ch": n, "dyn": dyn
+        }))
+
+def handle_ch_dyn(address, *args):   _dyn_handler(address, "channels", "ch",   args)
+def handle_aux_dyn(address, *args):  _dyn_handler(address, "aux",      "aux",  args)
+def handle_bus_dyn(address, *args):  _dyn_handler(address, "buses",    "bus",  args)
+def handle_main_dyn(address, *args): _dyn_handler(address, "main",     "main", args)
+
+
+# ── Gate handlers ─────────────────────────────────────────────────────────────
+# Wing gate paths: /ch/{n}/gate/on, /thr, /range, /att, /hld, /rel
+
+def _gate_handler(address: str, section: str, store_key: str, args):
+    parts = address.split("/")
+    try:
+        n = str(int(parts[2]))
+    except (IndexError, ValueError):
+        return
+    param = parts[4] if len(parts) > 4 else ""
+    store = app_state.mixer.get(section, {}).get(n, {})
+    gate  = store.setdefault("gate", {"on": False})
+
+    def float_val():
+        return float(args[0]) if args else 0.0
+
+    if param == "on":
+        gate["on"] = bool(parse_wing_int(args))
+    elif param == "thr":
+        gate["thr"] = float_val()
+    elif param == "range":
+        gate["range"] = float_val()
+    elif param == "att":
+        gate["att"] = float_val()
+    elif param in ("rel", "hld"):
+        gate[param] = float_val()
+
+    asyncio.create_task(broadcast({
+        "type": "gate", "strip": store_key, "ch": n, "gate": gate
+    }))
+
+def handle_ch_gate(address, *args):  _gate_handler(address, "channels", "ch",  args)
+def handle_aux_gate(address, *args): _gate_handler(address, "aux",      "aux", args)
+
+
+# ── Bus send handlers ─────────────────────────────────────────────────────────
+# Wing send paths: /ch/{n}/send/{b}/lvl, /ch/{n}/send/{b}/on
+
+def _send_handler(address: str, section: str, store_key: str, args):
+    """address e.g. /ch/1/send/3/lvl"""
+    parts = address.split("/")
+    try:
+        n     = str(int(parts[2]))   # channel number
+        b     = str(int(parts[4]))   # bus number
+        param = parts[5]             # lvl or on
+    except (IndexError, ValueError):
+        return
+    store  = app_state.mixer.get(section, {}).get(n, {})
+    sends  = store.setdefault("sends", {})
+    send_b = sends.setdefault(b, {"on": False, "lvl": 0.75})
+
+    if param == "lvl":
+        send_b["lvl"] = parse_wing_float(args)
+    elif param == "on":
+        send_b["on"] = bool(parse_wing_int(args))
+
+    asyncio.create_task(broadcast({
+        "type": "send", "strip": store_key, "ch": n, "bus": b, "send": send_b
+    }))
+
+def handle_ch_send(address, *args):  _send_handler(address, "channels", "ch",  args)
+def handle_aux_send(address, *args): _send_handler(address, "aux",      "aux", args)
+
+
 def osc_default_handler(address: str, *args):
     log.debug(f"[OSC unhandled] {address} {args}")
 
@@ -681,8 +864,8 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.send_text(json.dumps({
         "type": "wing_status",
         "connected": app_state.wing_connected,
-        "wing_ip": WING_IP,
-        "wing_port": WING_OSC_PORT,
+        "wing_ip": WING_IP(),
+        "wing_port": WING_OSC_PORT(),
     }))
     # Trigger a fresh query from the Wing to get latest values
     # (runs in background so the WebSocket isn't blocked)
@@ -936,8 +1119,8 @@ async def get_status():
         "wing_connected":   app_state.wing_connected,
         "recording":        app_state.recording,
         "ws_clients":       len(app_state.ws_clients),
-        "wing_ip":          WING_IP,
-        "wing_port":        WING_OSC_PORT,
+        "wing_ip":          WING_IP(),
+        "wing_port":        WING_OSC_PORT(),
         "local_port":       LOCAL_OSC_PORT,
         "sample_rate":      SAMPLE_RATE,
         "bit_depth":        BIT_DEPTH,
@@ -1019,8 +1202,8 @@ async def setup_detect():
 
 @app.post("/api/setup/test-osc")
 async def setup_test_osc(payload: dict):
-    ip      = payload.get("ip", WING_IP)
-    port    = int(payload.get("port", WING_OSC_PORT))
+    ip      = payload.get("ip", WING_IP())
+    port    = int(payload.get("port", WING_OSC_PORT()))
     timeout = float(payload.get("timeout", 3.0))
     return await test_osc_connection(ip, port, timeout)
 
@@ -1036,12 +1219,16 @@ async def setup_apply(payload: dict):
     audio_result     = apply_audio_passthrough(enable_audio)
     results["audio"] = audio_result
 
-    new_ip   = payload.get("wing_ip", WING_IP)
-    new_port = int(payload.get("wing_osc_port", WING_OSC_PORT))
+    new_ip   = payload.get("wing_ip", WING_IP())
+    new_port = int(payload.get("wing_osc_port", WING_OSC_PORT()))
     try:
+        # Update the live Wing target — takes effect immediately, no restart needed
+        set_wing_target(new_ip, new_port)
         app_state.wing_client = SimpleUDPClient(new_ip, new_port)
         # Send initial subscription to new endpoint
         app_state.wing_client.send_message(WING_SUBSCRIBE, [])
+        # Force probe loop to check connectivity right away
+        app_state.wing_connected = False
         results["osc_client"] = {"success": True, "message": f"OSC client updated → {new_ip}:{new_port}"}
     except Exception as e:
         results["osc_client"] = {"success": False, "message": str(e)}
@@ -1104,24 +1291,68 @@ async def bulk_query_wing():
     # Build list of all paths to query
     queries: list[str] = []
 
-    # Channels 1..40
+    # Channels 1..40 — core parameters
     for n in range(1, QUERY_CHANNELS + 1):
-        queries += [f"/ch/{n}/name", f"/ch/{n}/fdr", f"/ch/{n}/mute", f"/ch/{n}/pan", f"/ch/{n}/$solo"]
+        queries += [f"/ch/{n}/name", f"/ch/{n}/fdr", f"/ch/{n}/mute",
+                    f"/ch/{n}/pan",  f"/ch/{n}/$solo",
+                    # EQ
+                    f"/ch/{n}/eq/on",
+                    f"/ch/{n}/eq/1g", f"/ch/{n}/eq/1f", f"/ch/{n}/eq/1q",
+                    f"/ch/{n}/eq/2g", f"/ch/{n}/eq/2f", f"/ch/{n}/eq/2q",
+                    f"/ch/{n}/eq/3g", f"/ch/{n}/eq/3f", f"/ch/{n}/eq/3q",
+                    f"/ch/{n}/eq/4g", f"/ch/{n}/eq/4f", f"/ch/{n}/eq/4q",
+                    # Dynamics
+                    f"/ch/{n}/dyn/on",  f"/ch/{n}/dyn/thr", f"/ch/{n}/dyn/ratio",
+                    f"/ch/{n}/dyn/att", f"/ch/{n}/dyn/rel",  f"/ch/{n}/dyn/gain",
+                    f"/ch/{n}/dyn/knee",
+                    # Gate
+                    f"/ch/{n}/gate/on",  f"/ch/{n}/gate/thr",   f"/ch/{n}/gate/range",
+                    f"/ch/{n}/gate/att", f"/ch/{n}/gate/rel",
+                    # Bus sends 1..16
+                    *[f"/ch/{n}/send/{b}/lvl" for b in range(1, 17)],
+                    *[f"/ch/{n}/send/{b}/on"  for b in range(1, 17)],
+                ]
 
     # Aux inputs 1..8
     for n in range(1, QUERY_AUX + 1):
         queries += [f"/aux/{n}/name", f"/aux/{n}/fdr", f"/aux/{n}/mute",
-                    f"/aux/{n}/pan",  f"/aux/{n}/$solo"]
+                    f"/aux/{n}/pan",  f"/aux/{n}/$solo",
+                    f"/aux/{n}/eq/on",
+                    f"/aux/{n}/eq/1g", f"/aux/{n}/eq/1f", f"/aux/{n}/eq/1q",
+                    f"/aux/{n}/eq/2g", f"/aux/{n}/eq/2f", f"/aux/{n}/eq/2q",
+                    f"/aux/{n}/eq/3g", f"/aux/{n}/eq/3f", f"/aux/{n}/eq/3q",
+                    f"/aux/{n}/eq/4g", f"/aux/{n}/eq/4f", f"/aux/{n}/eq/4q",
+                    f"/aux/{n}/dyn/on", f"/aux/{n}/dyn/thr", f"/aux/{n}/dyn/ratio",
+                    f"/aux/{n}/dyn/att", f"/aux/{n}/dyn/rel",
+                    f"/aux/{n}/gate/on", f"/aux/{n}/gate/thr", f"/aux/{n}/gate/range",
+                    f"/aux/{n}/gate/att", f"/aux/{n}/gate/rel",
+                    *[f"/aux/{n}/send/{b}/lvl" for b in range(1, 17)],
+                    *[f"/aux/{n}/send/{b}/on"  for b in range(1, 17)],
+                ]
 
     # Mix buses 1..16
     for n in range(1, QUERY_BUSES + 1):
         queries += [f"/bus/{n}/name", f"/bus/{n}/fdr", f"/bus/{n}/mute",
-                    f"/bus/{n}/pan",  f"/bus/{n}/$solo"]
+                    f"/bus/{n}/pan",  f"/bus/{n}/$solo",
+                    f"/bus/{n}/eq/on",
+                    f"/bus/{n}/eq/1g", f"/bus/{n}/eq/1f", f"/bus/{n}/eq/1q",
+                    f"/bus/{n}/eq/2g", f"/bus/{n}/eq/2f", f"/bus/{n}/eq/2q",
+                    f"/bus/{n}/eq/3g", f"/bus/{n}/eq/3f", f"/bus/{n}/eq/3q",
+                    f"/bus/{n}/eq/4g", f"/bus/{n}/eq/4f", f"/bus/{n}/eq/4q",
+                    f"/bus/{n}/dyn/on", f"/bus/{n}/dyn/thr", f"/bus/{n}/dyn/ratio",
+                    f"/bus/{n}/dyn/att", f"/bus/{n}/dyn/rel",
+                ]
 
     # Mains 1..4
     for n in range(1, QUERY_MAINS + 1):
         queries += [f"/main/{n}/name", f"/main/{n}/fdr", f"/main/{n}/mute",
-                    f"/main/{n}/pan",  f"/main/{n}/$solo"]
+                    f"/main/{n}/pan",  f"/main/{n}/$solo",
+                    f"/main/{n}/eq/on",
+                    f"/main/{n}/eq/1g", f"/main/{n}/eq/1f", f"/main/{n}/eq/1q",
+                    f"/main/{n}/eq/2g", f"/main/{n}/eq/2f", f"/main/{n}/eq/2q",
+                    f"/main/{n}/dyn/on", f"/main/{n}/dyn/thr", f"/main/{n}/dyn/ratio",
+                    f"/main/{n}/dyn/att", f"/main/{n}/dyn/rel",
+                ]
 
     # Matrix 1..8
     QUERY_MATRIX = 8
@@ -1177,10 +1408,8 @@ async def bulk_query_wing():
 # To 0.0–1.0 UI range: clamp(dB, -60, 0) mapped to 0.0–1.0
 #
 
-WING_BINARY_PORT   = 2222          # Wing native binary TCP port (fixed)
 METER_UDP_PORT     = int(os.getenv("METER_UDP_PORT", "2225"))  # UDP port Wing sends meter data to
 METER_REPORT_ID    = 1             # Arbitrary ID to identify our meter subscription
-METER_RENEW_SEC    = 4.0           # Renew every 4s (Wing times out after 5s)
 METER_CHANNELS     = 40            # Request all 40 channel strips
 
 # Shared meter level store: {"ch-1": 0.75, "ch-2": 0.0, ...}
@@ -1250,22 +1479,38 @@ def _build_meter_renew(report_id: int) -> bytes:
     return select_ch3 + _nrp_escape(bytes([0xD4]) + id_bytes)
 
 
+def _raw_to_level(chunk_bytes: bytes, word_idx: int) -> float:
+    """Extract one signed int16 meter word and convert to 0.0-1.0 level."""
+    offset  = word_idx * 2
+    raw     = int.from_bytes(chunk_bytes[offset:offset+2], 'big', signed=True)
+    db      = raw / 256.0
+    clamped = max(-60.0, min(0.0, db))
+    return round((clamped + 60.0) / 60.0, 4)
+
+
 def _parse_meter_udp(data: bytes) -> dict:
     """
     Parse a Wing meter UDP packet containing all requested strip types.
     Format: 4-byte report_id + (8 words × 2 bytes) per strip, in request order.
-    Words per strip: in_L, in_R, out_L, out_R, gate_key, gate_gain, dyn_key, dyn_gain
-    We use out_L (word index 2, byte offset 4) as the primary VU level.
-    Returns dict {"ch-1": 0.75, "aux-2": 0.4, "bus-1": 0.6, ...} in 0.0–1.0 range.
-    DCA strips have no audio output level, so we return 0.0 for them.
+
+    Words per strip (channels / aux / bus / main / matrix):
+      0: in_L    1: in_R    2: out_L   3: out_R
+      4: gate_key  5: gate_gain  6: dyn_key  7: dyn_gain
+
+    Returns flat dict keyed by "stripType-id":
+      "ch-1":        0.0-1.0  output level (VU meter)
+      "ch-1-r":      0.0-1.0  output level right channel
+      "ch-1-gate":   0 or 1   gate open/closed
+      "ch-1-dyn":    0 or 1   compressor active
+      "ch-1-in":     0.0-1.0  input level (pre-fader)
+    DCA groups carry no audio — omitted from result.
     """
     if len(data) < 4:
         return {}
 
-    payload   = data[4:]   # skip 4-byte report ID
-    WORDS     = 8          # words per strip
-    BYTES     = WORDS * 2  # 16 bytes per strip
-    result    = {}
+    payload = data[4:]   # skip 4-byte report ID
+    BYTES   = 16         # 8 words × 2 bytes per strip
+    result  = {}
 
     for strip_idx, (strip_key, strip_num) in enumerate(METER_STRIP_ORDER):
         offset = strip_idx * BYTES
@@ -1273,17 +1518,23 @@ def _parse_meter_udp(data: bytes) -> dict:
             break
         chunk = payload[offset : offset + BYTES]
 
-        # DCA groups carry fader-level data, not audio, skip level for them
         if strip_key == "dca":
-            result[f"dca-{strip_num}"] = 0.0
-            continue
+            continue   # DCA has no audio meters
 
-        # Word 2 = output_L (post-fader left level), bytes [4:6]
-        raw     = int.from_bytes(chunk[4:6], 'big', signed=True)
-        db      = raw / 256.0
-        clamped = max(-60.0, min(0.0, db))
-        level   = round((clamped + 60.0) / 60.0, 4)
-        result[f"{strip_key}-{strip_num}"] = level
+        key = f"{strip_key}-{strip_num}"
+
+        # Output levels (post-fader) — words 2 (L) and 3 (R)
+        result[key]         = _raw_to_level(chunk, 2)   # out_L  (primary VU)
+        result[f"{key}-r"]  = _raw_to_level(chunk, 3)   # out_R
+
+        # Input levels (pre-fader) — words 0 (L) and 1 (R)
+        result[f"{key}-in"] = _raw_to_level(chunk, 0)   # in_L
+
+        # Gate and dynamics state — words 4 and 6 (key = 0 closed, 1 open)
+        gate_raw = int.from_bytes(chunk[8:10], 'big', signed=True)
+        dyn_raw  = int.from_bytes(chunk[12:14], 'big', signed=True)
+        result[f"{key}-gate"] = 1 if gate_raw > 0 else 0
+        result[f"{key}-dyn"]  = 1 if dyn_raw  > 0 else 0
 
     return result
 
@@ -1328,13 +1579,13 @@ async def meter_engine():
         # ── Open TCP connection to Wing binary port ───────────────────────
         try:
             tcp_reader, tcp_writer = await asyncio.wait_for(
-                asyncio.open_connection(WING_IP, WING_BINARY_PORT),
+                asyncio.open_connection(WING_IP(), WING_BINARY_PORT),
                 timeout=5.0
             )
-            log.info(f"Meter TCP connected → {WING_IP}:{WING_BINARY_PORT}")
+            log.info(f"Meter TCP connected → {WING_IP()}:{WING_BINARY_PORT}")
             backoff = 2.0   # reset backoff on success
         except Exception as e:
-            log.warning(f"Meter TCP connect failed ({WING_IP}:{WING_BINARY_PORT}): {e}")
+            log.warning(f"Meter TCP connect failed ({WING_IP()}:{WING_BINARY_PORT}): {e}")
             udp_sock.close()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 1.5, 30.0)

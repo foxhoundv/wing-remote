@@ -59,6 +59,7 @@ WORKDIR /app
 COPY backend/      ./backend/
 COPY frontend/     ./frontend/
 COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Create persistent data directories
 RUN mkdir -p /recordings /snapshots

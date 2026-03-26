@@ -7,6 +7,7 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;500;600;700&family=Barlow:wght@300;400;500&display=swap');
 
+  /* ── Dark mode (default) ── */
   :root {
     --bg-deep:     #0e0f11;
     --bg-panel:    #141518;
@@ -29,6 +30,51 @@
     --text-muted:  #4a4e5a;
     --fader-track: #0a0b0d;
     --meter-bg:    #0c0e10;
+  }
+
+  /* ── Light mode ── */
+  :root.light {
+    --bg-deep:     #e8eaed;
+    --bg-panel:    #f2f3f5;
+    --bg-surface:  #ffffff;
+    --bg-raised:   #dfe1e6;
+    --border:      #c4c8d0;
+    --border-hi:   #a8adb8;
+    --orange:      #c4680a;
+    --orange-dim:  #a85c06;
+    --orange-glow: rgba(196,104,10,0.2);
+    --amber:       #b87a00;
+    --green:       #1a8a4a;
+    --green-dim:   #a3d9b8;
+    --red:         #c0281e;
+    --red-dim:     #f5c0bc;
+    --blue:        #1a6fd4;
+    --cyan:        #007a8a;
+    --text-primary:#1a1c22;
+    --text-dim:    #4a4e5a;
+    --text-muted:  #8a8e9a;
+    --fader-track: #d0d3da;
+    --meter-bg:    #dde0e6;
+  }
+
+  /* ── Theme toggle button ── */
+  .theme-toggle {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border-hi);
+    background: var(--bg-raised);
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    transition: all .2s;
+    flex-shrink: 0;
+    margin-right: 6px;
+  }
+  .theme-toggle:hover {
+    border-color: var(--orange-dim);
+    color: var(--orange);
+    background: var(--bg-surface);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -100,6 +146,18 @@
     border-color: var(--orange-dim);
     box-shadow: 0 0 12px var(--orange-glow);
   }
+  .nav-divider {
+    width: 1px;
+    background: var(--border-hi);
+    margin: 4px 4px;
+    align-self: stretch;
+  }
+  .nav-btn-rec { color: var(--red-dim); }
+  .nav-btn-rec:hover { color: #ff8080; }
+  .nav-btn-rec.active { color: var(--red); border-color: var(--red-dim);
+    box-shadow: 0 0 12px rgba(232,64,64,.2); }
+  .nav-btn-setup { color: var(--amber); }
+  .nav-btn-setup:hover { color: #ffd080; border-color: var(--border-hi); }
 
   /* ── MAIN LAYOUT ── */
   .main { display: flex; height: calc(100vh - 44px); }
@@ -211,6 +269,44 @@
     transition: height .05s linear;
     background: linear-gradient(to top, var(--green) 0%, var(--green) 70%, var(--amber) 85%, var(--red) 100%);
   }
+  /* Light mode: darker meter background for contrast */
+  :root.light .meter-bar { background: #c8ccd6; }
+  :root.light .fader-track { background: #c0c4ce; }
+  :root.light .fader-handle {
+    background: linear-gradient(180deg, #d8dae0 0%, #b8bcc8 50%, #a8acb8 100%);
+    border-color: var(--border);
+  }
+  :root.light .fader-0db { background: var(--orange-dim); }
+  :root.light .knob {
+    background: radial-gradient(circle at 35% 35%, #d0d4de, #a8acb8);
+  }
+  :root.light .strip-led { background: #d8dce8; }
+  :root.light .strip-led.gate-active { background: #c0e8d0; }
+  :root.light .strip-led.dyn-active  { background: #c0d4f0; }
+  :root.light .ch-color-bar { opacity: 0.85; }
+  :root.light .eq-graph-wrap { background: #e4e8f0; }
+  :root.light .dynamics-graph { background: #e4e8f0; }
+  :root.light .wiz-log { background: #eaecf2; }
+  :root.light .wiz-input, :root.light .wiz-select { background: #fff; color: #1a1c22; }
+  :root.light .conn-input { background: #fff; color: #1a1c22; }
+  :root.light .param-slider { background: var(--border); }
+  :root.light .device-list  { background: #eaecf2; }
+  :root.light .device-item:hover { background: #d8dce8; }
+  :root.light .wiz-toggle-slider { background: #c8ccd8; }
+  :root.light .rec-time { background: #e0e3ea; }
+  .strip-leds {
+    display: flex; gap: 3px; padding: 2px 4px; justify-content: center;
+    font-size: 8px; font-weight: 700; letter-spacing: .5px;
+  }
+  .strip-led {
+    padding: 1px 4px; border-radius: 2px;
+    border: 1px solid var(--border);
+    color: var(--text-muted); background: var(--bg-deep);
+    transition: background .08s, color .08s;
+  }
+  .strip-led.gate-active  { background: #1a3a1a; color: var(--green);  border-color: var(--green-dim); }
+  .strip-led.dyn-active   { background: #1a1a3a; color: var(--blue);   border-color: #2a2a6a; }
+  .strip-led.eq-active    { background: #2a1a1a; color: var(--amber);  border-color: var(--orange-dim); }
   .meter-clip {
     position: absolute; top: 0; left: 0; right: 0; height: 3px;
     background: var(--red); opacity: 0; transition: opacity .1s;
@@ -554,12 +650,31 @@
 <div class="topbar">
   <div class="topbar-logo">WING <span>Remote</span></div>
   <div class="topbar-nav">
-    <button class="nav-btn active" onclick="setView('mixer')">Mixer</button>
-    <button class="nav-btn" onclick="setView('routing')">Routing</button>
-    <button class="nav-btn" onclick="setView('recording')">Recording</button>
-    <button class="nav-btn" onclick="setView('settings')">Settings</button>
+    <button class="nav-btn active" id="nav-home"      onclick="setView('home')">Home</button>
+    <button class="nav-btn"        id="nav-effects"   onclick="setView('effects')">Effects</button>
+    <button class="nav-btn"        id="nav-meters"    onclick="setView('meters')">Meters</button>
+    <button class="nav-btn"        id="nav-routing"   onclick="setView('routing')">Routing</button>
+    <button class="nav-btn"        id="nav-library"   onclick="setView('library')">Library</button>
+    <button class="nav-btn"        id="nav-utility"   onclick="setView('utility')">Utility</button>
+    <div class="nav-divider"></div>
+    <button class="nav-btn nav-btn-rec" id="nav-recording" onclick="setView('recording')">Recording</button>
+    <div class="nav-divider"></div>
+    <button class="nav-btn nav-btn-setup" id="nav-setup" onclick="openWizard()" title="Wing Remote settings only — does not affect the Behringer Wing console">Setup ⚙</button>
   </div>
   <div class="topbar-status">
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle light / dark mode"><svg id="iconMoon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+</svg><svg id="iconSun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+  <circle cx="12" cy="12" r="5"/>
+  <line x1="12" y1="1"  x2="12" y2="3"/>
+  <line x1="12" y1="21" x2="12" y2="23"/>
+  <line x1="4.22" y1="4.22"  x2="5.64" y2="5.64"/>
+  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+  <line x1="1"  y1="12" x2="3"  y2="12"/>
+  <line x1="21" y1="12" x2="23" y2="12"/>
+  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+</svg></button>
     <div class="status-pill" id="oscStatus">
       <div class="status-dot offline" id="oscDot"></div>
       <span id="oscLabel">OSC Disconnected</span>
@@ -664,92 +779,51 @@
   <!-- DETAIL PANEL -->
   <div class="detail-panel" id="detailPanel">
     <div class="detail-header">
-      <div class="detail-title" id="detailTitle">CH 1</div>
-      <div class="detail-ch-badge" id="detailBadge">SELECT CHANNEL</div>
+      <div class="detail-title" id="detailTitle">—</div>
+      <div class="detail-ch-badge" id="detailBadge">SELECT A CHANNEL</div>
     </div>
 
     <!-- EQ -->
-    <div class="detail-section">
-      <div class="detail-section-label">Parametric EQ</div>
+    <div class="detail-section" id="detail-eq">
+      <div class="detail-section-label" style="display:flex;align-items:center;justify-content:space-between;">
+        Parametric EQ
+        <span id="eq-on-badge" style="font-size:9px;padding:2px 7px;border-radius:2px;
+          background:var(--bg-raised);border:1px solid var(--border);color:var(--text-muted)">OFF</span>
+      </div>
       <div class="eq-graph-wrap">
         <canvas id="eqCanvas" height="100"></canvas>
       </div>
       <div class="eq-freq-labels">
         <span>20</span><span>100</span><span>500</span><span>1k</span><span>5k</span><span>20k</span>
       </div>
-      <div class="eq-bands">
-        <div class="eq-band">
-          <div class="eq-band-name">LF</div>
-          <div class="knob" id="eqKnob0" data-band="0"></div>
-          <div class="eq-band-val" id="eqVal0">0.0dB</div>
-        </div>
-        <div class="eq-band">
-          <div class="eq-band-name">LMF</div>
-          <div class="knob" id="eqKnob1" data-band="1"></div>
-          <div class="eq-band-val" id="eqVal1">0.0dB</div>
-        </div>
-        <div class="eq-band">
-          <div class="eq-band-name">HMF</div>
-          <div class="knob" id="eqKnob2" data-band="2"></div>
-          <div class="eq-band-val" id="eqVal2">0.0dB</div>
-        </div>
-        <div class="eq-band">
-          <div class="eq-band-name">HF</div>
-          <div class="knob" id="eqKnob3" data-band="3"></div>
-          <div class="eq-band-val" id="eqVal3">0.0dB</div>
-        </div>
-      </div>
+      <div class="eq-bands" id="eqBandsContainer"></div>
     </div>
 
     <!-- Dynamics -->
-    <div class="detail-section">
-      <div class="detail-section-label">Dynamics</div>
-      <div class="dynamics-graph"><canvas id="dynCanvas"></canvas></div>
-      <div class="param-grid">
-        <div class="param-item">
-          <div class="param-item-label">Threshold</div>
-          <div class="param-item-val" id="dynThresh">−18 dB</div>
-          <input type="range" class="param-slider" min="0" max="100" value="40" oninput="updateParam('dynThresh', this.value, '−','dB', -60, 0)">
-        </div>
-        <div class="param-item">
-          <div class="param-item-label">Ratio</div>
-          <div class="param-item-val" id="dynRatio">4:1</div>
-          <input type="range" class="param-slider" min="1" max="20" value="4" oninput="updateRatio(this.value)">
-        </div>
-        <div class="param-item">
-          <div class="param-item-label">Attack</div>
-          <div class="param-item-val" id="dynAttack">10 ms</div>
-          <input type="range" class="param-slider" min="0" max="100" value="20" oninput="updateParam('dynAttack', this.value, '','ms', 0.1, 200)">
-        </div>
-        <div class="param-item">
-          <div class="param-item-label">Release</div>
-          <div class="param-item-val" id="dynRelease">120 ms</div>
-          <input type="range" class="param-slider" min="0" max="100" value="40" oninput="updateParam('dynRelease', this.value, '','ms', 10, 3000)">
-        </div>
+    <div class="detail-section" id="detail-dyn">
+      <div class="detail-section-label" style="display:flex;align-items:center;justify-content:space-between;">
+        Compressor
+        <span id="dyn-on-badge" style="font-size:9px;padding:2px 7px;border-radius:2px;
+          background:var(--bg-raised);border:1px solid var(--border);color:var(--text-muted)">OFF</span>
       </div>
-    </div>
-
-    <!-- Sends -->
-    <div class="detail-section">
-      <div class="detail-section-label">Bus Sends</div>
-      <div class="param-grid" id="busSends"></div>
+      <div class="dynamics-graph"><canvas id="dynCanvas"></canvas></div>
+      <div class="param-grid" id="dynParams"></div>
     </div>
 
     <!-- Gate -->
-    <div class="detail-section">
-      <div class="detail-section-label">Gate / Expander</div>
-      <div class="param-grid">
-        <div class="param-item">
-          <div class="param-item-label">Gate Thresh</div>
-          <div class="param-item-val" id="gateThresh">−40 dB</div>
-          <input type="range" class="param-slider" min="0" max="100" value="30" oninput="updateParam('gateThresh', this.value, '−','dB', 60, 0)">
-        </div>
-        <div class="param-item">
-          <div class="param-item-label">Range</div>
-          <div class="param-item-val" id="gateRange">−60 dB</div>
-          <input type="range" class="param-slider" min="0" max="100" value="100" oninput="updateParam('gateRange', this.value, '−','dB', 0, 60)">
-        </div>
+    <div class="detail-section" id="detail-gate">
+      <div class="detail-section-label" style="display:flex;align-items:center;justify-content:space-between;">
+        Gate / Expander
+        <span id="gate-on-badge" style="font-size:9px;padding:2px 7px;border-radius:2px;
+          background:var(--bg-raised);border:1px solid var(--border);color:var(--text-muted)">OFF</span>
       </div>
+      <div class="param-grid" id="gateParams"></div>
+    </div>
+
+    <!-- Bus Sends -->
+    <div class="detail-section" id="detail-sends">
+      <div class="detail-section-label">Bus Sends</div>
+      <div class="param-grid" id="busSends"></div>
     </div>
   </div>
 </div>
@@ -783,6 +857,7 @@ function makeStrip(n, prefix) {
     id: n, name: `${prefix} ${n}`,
     fader: 0.75, pan: 0.0, muted: false, solo: false,
     recArmed: false, meter: [0,0], clip: [false,false], eqBands: [0,0,0,0],
+    gateActive: false, dynActive: false,
   };
 }
 
@@ -796,19 +871,19 @@ state.dca       = Array.from({length:16}, (_,i) => makeStrip(i+1,'DCA'));
 
 // Layer config: defines what each sidebar nav item shows
 const LAYERS = {
-  ch:     { strips: ()=>state.channels, prefix:'CH',   tabs:['CH 1–16','CH 17–24','CH 25–32','CH 33–40'], tabSize:16, stripType:'ch',   color:'#e8820a', showMaster:false },
-  aux:    { strips: ()=>state.aux,      prefix:'AUX',  tabs:['AUX 1–8'],                                  tabSize:8,  stripType:'aux',  color:'#4a9eff', showMaster:false },
-  bus:    { strips: ()=>state.buses,    prefix:'BUS',  tabs:['BUS 1–8','BUS 9–16'],                       tabSize:8,  stripType:'bus',  color:'#00d4d4', showMaster:false },
-  matrix: { strips: ()=>state.matrix,  prefix:'MTX',  tabs:['MTX 1–8'],                                  tabSize:8,  stripType:'mtx',  color:'#3ddc84', showMaster:false },
-  dca:    { strips: ()=>state.dca,      prefix:'DCA',  tabs:['DCA 1–8','DCA 9–16'],                       tabSize:8,  stripType:'dca',  color:'#f5a623', showMaster:false },
-  main:   { strips: ()=>state.mains,    prefix:'MAIN', tabs:['MAINS 1–4'],                                tabSize:4,  stripType:'main', color:'#e84040', showMaster:true  },
+  // tabSize = max strips per tab page; slice() handles the last page being smaller
+  ch:     { strips: ()=>state.channels, prefix:'CH',   tabs:['CH 1–16','CH 17–32','CH 33–40'], tabSize:16, stripType:'ch',   color:'#e8820a', showMaster:false },
+  aux:    { strips: ()=>state.aux,      prefix:'AUX',  tabs:['AUX 1–8'],                       tabSize:8,  stripType:'aux',  color:'#4a9eff', showMaster:false },
+  bus:    { strips: ()=>state.buses,    prefix:'BUS',  tabs:['BUS 1–8','BUS 9–16'],            tabSize:8,  stripType:'bus',  color:'#00d4d4', showMaster:false },
+  matrix: { strips: ()=>state.matrix,  prefix:'MTX',  tabs:['MTX 1–8'],                       tabSize:8,  stripType:'mtx',  color:'#3ddc84', showMaster:false },
+  dca:    { strips: ()=>state.dca,      prefix:'DCA',  tabs:['DCA 1–8','DCA 9–16'],            tabSize:8,  stripType:'dca',  color:'#f5a623', showMaster:false },
+  main:   { strips: ()=>state.mains,    prefix:'MAIN', tabs:['MAINS 1–4'],                     tabSize:4,  stripType:'main', color:'#e84040', showMaster:true  },
 };
 
 let activeTabIndex = 0;
 
 // ── INIT ─────────────────────────────────────────────
 function initChannels() {
-  renderBusSends();
   selectLayer('ch', document.getElementById('nav-ch'));
   animateMeters();
 }
@@ -867,6 +942,24 @@ function renderCurrentStrips() {
 // ── RENDER STRIPS (legacy alias used by snapshot handler) ──
 function renderStrips() { renderCurrentStrips(); }
 
+// Re-render a single strip if it is currently visible on screen.
+// Called by WS handlers after they update the state array so the strip
+// immediately reflects the new attribute without a full re-render.
+function refreshStripIfVisible(stripType, id) {
+  const layer = LAYERS[state.currentLayer];
+  if (!layer || layer.stripType !== stripType) return;  // wrong layer shown
+  const allStrips = layer.strips();
+  const start     = activeTabIndex * layer.tabSize;
+  const page      = allStrips.slice(start, start + layer.tabSize);
+  const globalIdx = allStrips.findIndex(ch => ch.id === id);
+  if (globalIdx < start || globalIdx >= start + page.length) return;  // not on this page
+  const ch    = allStrips[globalIdx];
+  const oldEl = document.getElementById(`strip-${stripType}-${id}`);
+  if (!oldEl) return;
+  const newEl = createStrip(ch, globalIdx, stripType, layer.color);
+  oldEl.replaceWith(newEl);
+}
+
 function createStrip(ch, globalIdx, stripType, accentColor) {
   // globalIdx = position in the full layer array (0-based)
   // ch.id     = 1-based Wing channel number
@@ -898,6 +991,11 @@ function createStrip(ch, globalIdx, stripType, accentColor) {
       <div class="meter-bar"><div class="meter-fill" id="fill-r-${stripType_}-${ch.id}"></div>
         <div class="meter-clip" id="clip-r-${stripType_}-${ch.id}"></div></div>
     </div>
+
+    ${(hasEQ || hasPan) ? `<div class="strip-leds">
+      <div class="strip-led ${ch.gateActive?'gate-active':''}" id="led-gate-${stripType_}-${ch.id}">G</div>
+      <div class="strip-led ${ch.dynActive?'dyn-active':''}"  id="led-dyn-${stripType_}-${ch.id}">D</div>
+    </div>` : ''}
 
     ${hasEQ ? `<div class="eq-thumb" onclick="event.stopPropagation();selectChannel(${globalIdx},'${stripType_}')">
       <canvas id="eq-mini-${stripType_}-${ch.id}" width="56" height="30"></canvas>
@@ -963,10 +1061,43 @@ function createMasterStrip() {
 const meterTargets = {};  // { "1": 0.75, ... } keyed by 1-based channel number
 
 function applyMeterValues(levels) {
-  // levels: { "ch-1": 0.75, "aux-3": 0.4, "bus-1": 0.6, ... }
-  // Keys are already in "stripType-id" format from the backend parser.
+  // levels keys from backend:
+  //   "ch-1"       → output_L VU level (0.0-1.0)
+  //   "ch-1-r"     → output_R VU level
+  //   "ch-1-in"    → input_L level
+  //   "ch-1-gate"  → gate state (0 or 1)
+  //   "ch-1-dyn"   → dyn/comp state (0 or 1)
+  const smap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix'};
+
   Object.entries(levels).forEach(([key, val]) => {
-    meterTargets[key] = Math.max(0, Math.min(1, val));
+    if (key.endsWith('-gate') || key.endsWith('-dyn') || key.endsWith('-r') || key.endsWith('-in')) {
+      // State/secondary keys — update strip state and LED DOM
+      const parts    = key.split('-');
+      const suffix   = parts[parts.length - 1];          // 'gate','dyn','r','in'
+      const stripKey = parts[0];                          // 'ch','aux', etc.
+      const id       = parseInt(parts[1]);
+      const arrKey   = smap[stripKey];
+      const arr      = arrKey ? state[arrKey] : null;
+      const strip    = arr ? arr[id-1] : null;
+
+      if (suffix === 'gate' && strip) {
+        strip.gateActive = val > 0;
+        const el = document.getElementById(`led-gate-${stripKey}-${id}`);
+        el?.classList.toggle('gate-active', strip.gateActive);
+      } else if (suffix === 'dyn' && strip) {
+        strip.dynActive = val > 0;
+        const el = document.getElementById(`led-dyn-${stripKey}-${id}`);
+        el?.classList.toggle('dyn-active', strip.dynActive);
+      } else if (suffix === 'r') {
+        // Right channel meter — update fill-r element directly
+        const el = document.getElementById(`fill-r-${stripKey}-${id}`);
+        if (el) el.style.height = (Math.max(0, Math.min(1, val)) * 100) + '%';
+      }
+      // 'in' key (input level) stored but not separately displayed yet
+    } else {
+      // Primary output_L level — goes into meterTargets for animation
+      meterTargets[key] = Math.max(0, Math.min(1, val));
+    }
   });
 }
 
@@ -1003,9 +1134,8 @@ function animateMeters() {
     ch.meter[1]   = ch.meter[0] * (0.95 + Math.random() * 0.05);
 
     const fl = document.getElementById(`fill-l-${chKey}`);
-    const fr = document.getElementById(`fill-r-${chKey}`);
     if (fl) fl.style.height = (ch.meter[0] * 100) + '%';
-    if (fr) fr.style.height = (ch.meter[1] * 100) + '%';
+    // fill-r is updated directly by applyMeterValues with the real R channel value
 
     ch.clip[0] = ch.meter[0] > 0.95;
     document.getElementById(`clip-l-${chKey}`)?.classList.toggle('active', ch.clip[0]);
@@ -1166,8 +1296,172 @@ function selectChannel(globalIdx, stripType) {
   document.getElementById(`strip-${state.selectedStripType}-${ch.id}`)?.classList.add('selected');
   document.getElementById('detailTitle').textContent = ch.name;
   document.getElementById('detailBadge').textContent = `${layer.prefix} ${ch.id}`;
-  drawEqMain(ch.eqBands);
-  drawDynGraph(-18, 4);
+  populateDetailPanel(ch, state.selectedStripType);
+}
+
+// ── DETAIL PANEL — populate with real hardware values ────────────────────────
+function populateDetailPanel(ch, stripType) {
+  if (!ch) return;
+
+  // ── EQ ───────────────────────────────────────────────────────────────────
+  const eq = ch.eq || {on: false, bands: []};
+  const eqOnBadge = document.getElementById('eq-on-badge');
+  if (eqOnBadge) {
+    eqOnBadge.textContent = eq.on ? 'ON' : 'OFF';
+    eqOnBadge.style.color = eq.on ? 'var(--cyan)' : 'var(--text-muted)';
+    eqOnBadge.style.borderColor = eq.on ? 'var(--cyan)' : 'var(--border)';
+    eqOnBadge.style.background  = eq.on ? 'rgba(0,212,212,.1)' : 'var(--bg-raised)';
+  }
+
+  // Render EQ band knobs dynamically based on how many bands exist
+  const bandsEl = document.getElementById('eqBandsContainer');
+  if (bandsEl) {
+    const bands = eq.bands || [];
+    const labels = ['LF','LMF','MF','HMF','HF','HF2','HF3','HF4'].slice(0, bands.length || 4);
+    bandsEl.innerHTML = labels.map((lbl, i) => {
+      const band = bands[i] || {g:0, f:1000, q:0.7};
+      const gain = typeof band.g === 'number' ? band.g.toFixed(1) : '0.0';
+      const freq = typeof band.f === 'number'
+        ? (band.f >= 1000 ? (band.f/1000).toFixed(1)+'k' : band.f.toFixed(0)+'Hz')
+        : '—';
+      const rot  = ((band.g||0) / 15) * 135;
+      return `<div class="eq-band">
+        <div class="eq-band-name">${lbl}</div>
+        <div class="knob" style="transform:rotate(${rot}deg)" title="${freq}"></div>
+        <div class="eq-band-val" style="color:${(band.g||0)>0?'var(--cyan)':(band.g||0)<0?'var(--amber)':'var(--text-dim)'}">${gain>0?'+':''}${gain}dB</div>
+        <div style="font-size:8px;color:var(--text-muted);text-align:center">${freq}</div>
+      </div>`;
+    }).join('');
+    drawEqMain(bands.map(b => b.g || 0));
+  }
+
+  // ── Dynamics ─────────────────────────────────────────────────────────────
+  const dyn = ch.dyn || {on: false, thr: -20, ratio: '4.0', att: 10, rel: 100};
+  const dynOnBadge = document.getElementById('dyn-on-badge');
+  if (dynOnBadge) {
+    dynOnBadge.textContent = dyn.on ? 'ON' : 'OFF';
+    dynOnBadge.style.color = dyn.on ? 'var(--blue)' : 'var(--text-muted)';
+    dynOnBadge.style.borderColor = dyn.on ? 'var(--blue)' : 'var(--border)';
+    dynOnBadge.style.background  = dyn.on ? 'rgba(74,158,255,.1)' : 'var(--bg-raised)';
+  }
+  const dynEl = document.getElementById('dynParams');
+  if (dynEl) {
+    const thr   = typeof dyn.thr === 'number' ? dyn.thr : -20;
+    const ratio = dyn.ratio !== undefined ? dyn.ratio : '4.0';
+    const att   = typeof dyn.att === 'number' ? dyn.att : 10;
+    const rel   = typeof dyn.rel === 'number' ? dyn.rel : 100;
+    const gain  = typeof dyn.gain === 'number' ? dyn.gain : 0;
+    const thrPct  = Math.round(((thr + 60) / 60) * 100);
+    const attPct  = Math.round((att / 200) * 100);
+    const relPct  = Math.round((Math.log10(rel/4) / Math.log10(3000/4)) * 100);
+    dynEl.innerHTML = `
+      <div class="param-item"><div class="param-item-label">Threshold</div>
+        <div class="param-item-val">${thr.toFixed(1)} dB</div>
+        <input type="range" class="param-slider" min="0" max="100" value="${thrPct}"
+          oninput="sendOSCfromDetail('${stripType}',${ch.id},'dyn/thr',this.value,-60,0)"></div>
+      <div class="param-item"><div class="param-item-label">Ratio</div>
+        <div class="param-item-val">${ratio}:1</div>
+        <input type="range" class="param-slider" min="0" max="100" value="40" disabled></div>
+      <div class="param-item"><div class="param-item-label">Attack</div>
+        <div class="param-item-val">${att.toFixed(1)} ms</div>
+        <input type="range" class="param-slider" min="0" max="100" value="${attPct}"
+          oninput="sendOSCfromDetail('${stripType}',${ch.id},'dyn/att',this.value,0,200)"></div>
+      <div class="param-item"><div class="param-item-label">Release</div>
+        <div class="param-item-val">${rel.toFixed(0)} ms</div>
+        <input type="range" class="param-slider" min="0" max="100" value="${relPct}"
+          oninput="sendOSCfromDetail('${stripType}',${ch.id},'dyn/rel',this.value,4,3000)"></div>
+      ${gain !== 0 ? `<div class="param-item"><div class="param-item-label">Make-up Gain</div>
+        <div class="param-item-val">${gain>=0?'+':''}${gain.toFixed(1)} dB</div></div>` : ''}`;
+    drawDynGraph(thr, parseFloat(ratio) || 4);
+  }
+
+  // ── Gate ─────────────────────────────────────────────────────────────────
+  const gate = ch.gate || {on: false, thr: -40, range: 60, att: 0, rel: 100};
+  const gateOnBadge = document.getElementById('gate-on-badge');
+  const gateEl      = document.getElementById('gateParams');
+  const gateSection = document.getElementById('detail-gate');
+  // Only show gate for strip types that have it
+  const hasGate = stripType === 'ch' || stripType === 'aux';
+  if (gateSection) gateSection.style.display = hasGate ? '' : 'none';
+  if (hasGate) {
+    if (gateOnBadge) {
+      gateOnBadge.textContent = gate.on ? 'ON' : 'OFF';
+      gateOnBadge.style.color = gate.on ? 'var(--green)' : 'var(--text-muted)';
+      gateOnBadge.style.borderColor = gate.on ? 'var(--green-dim)' : 'var(--border)';
+      gateOnBadge.style.background  = gate.on ? 'rgba(61,220,132,.1)' : 'var(--bg-raised)';
+    }
+    if (gateEl) {
+      const thr   = typeof gate.thr   === 'number' ? gate.thr   : -40;
+      const range = typeof gate.range === 'number' ? gate.range : 60;
+      const att   = typeof gate.att   === 'number' ? gate.att   : 0;
+      const rel   = typeof gate.rel   === 'number' ? gate.rel   : 100;
+      const thrPct   = Math.round(((thr + 80) / 80) * 100);
+      const rangePct = Math.round((range / 60) * 100);
+      const attPct   = Math.round((att / 120) * 100);
+      const relPct   = Math.round((rel / 4000) * 100);
+      gateEl.innerHTML = `
+        <div class="param-item"><div class="param-item-label">Threshold</div>
+          <div class="param-item-val">${thr.toFixed(1)} dB</div>
+          <input type="range" class="param-slider" min="0" max="100" value="${thrPct}"
+            oninput="sendOSCfromDetail('${stripType}',${ch.id},'gate/thr',this.value,-80,0)"></div>
+        <div class="param-item"><div class="param-item-label">Range</div>
+          <div class="param-item-val">${range.toFixed(1)} dB</div>
+          <input type="range" class="param-slider" min="0" max="100" value="${rangePct}"
+            oninput="sendOSCfromDetail('${stripType}',${ch.id},'gate/range',this.value,3,60)"></div>
+        <div class="param-item"><div class="param-item-label">Attack</div>
+          <div class="param-item-val">${att.toFixed(1)} ms</div>
+          <input type="range" class="param-slider" min="0" max="100" value="${attPct}"
+            oninput="sendOSCfromDetail('${stripType}',${ch.id},'gate/att',this.value,0,120)"></div>
+        <div class="param-item"><div class="param-item-label">Release</div>
+          <div class="param-item-val">${rel.toFixed(0)} ms</div>
+          <input type="range" class="param-slider" min="0" max="100" value="${relPct}"
+            oninput="sendOSCfromDetail('${stripType}',${ch.id},'gate/rel',this.value,4,4000)"></div>`;
+    }
+  }
+
+  // ── Bus Sends ─────────────────────────────────────────────────────────────
+  const sendsSection = document.getElementById('detail-sends');
+  const sendsEl      = document.getElementById('busSends');
+  // Only show sends for channels and aux
+  const hasSends = stripType === 'ch' || stripType === 'aux';
+  if (sendsSection) sendsSection.style.display = hasSends ? '' : 'none';
+  if (hasSends && sendsEl) {
+    const sends = ch.sends || {};
+    sendsEl.innerHTML = Array.from({length:16}, (_,i) => {
+      const b    = String(i+1);
+      const send = sends[b] || {on: false, lvl: 0.75};
+      const lvlPct = Math.round((send.lvl || 0) * 100);
+      const db   = faderToDb(send.lvl || 0);
+      return `<div class="param-item">
+        <div class="param-item-label" style="display:flex;justify-content:space-between;align-items:center">
+          <span>BUS ${b}</span>
+          <span style="font-size:8px;padding:1px 5px;border-radius:2px;cursor:pointer;
+            background:${send.on?'rgba(232,130,10,.2)':'var(--bg-raised)'};
+            border:1px solid ${send.on?'var(--orange-dim)':'var(--border)'};
+            color:${send.on?'var(--orange)':'var(--text-muted)'};"
+            onclick="toggleSendOn('${stripType}',${ch.id},${b})">${send.on?'ON':'OFF'}</span>
+        </div>
+        <div class="param-item-val">${db}</div>
+        <input type="range" class="param-slider" min="0" max="100" value="${lvlPct}"
+          oninput="sendSendLevel('${stripType}',${ch.id},${b},this.value)"></div>`;
+    }).join('');
+  }
+}
+
+// Send a parameter change from the detail panel to the Wing
+function sendOSCfromDetail(stripType, id, paramPath, sliderVal, min, max) {
+  const val = min + (sliderVal / 100) * (max - min);
+  const path = `/${stripType === 'ch' ? 'ch' : stripType}/${id}/${paramPath}`;
+  sendOSC(path, val);
+}
+
+function toggleSendOn(stripType, id, bus) {
+  sendOSC(`/${stripType}/${id}/send/${bus}/on`, -1);  // Wing toggle
+}
+
+function sendSendLevel(stripType, id, bus, sliderVal) {
+  const val = sliderVal / 100;
+  sendOSC(`/${stripType}/${id}/send/${bus}/lvl`, val);
 }
 
 // ── MUTE / SOLO / REC ───────────────────────────────
@@ -1307,34 +1601,10 @@ function animateWaveform() {
 }
 
 // ── PARAM UPDATERS ───────────────────────────────────
-function updateParam(id, v, prefix, suffix, min, max) {
-  const val = min + (v/100) * (max - min);
-  const formatted = Math.abs(val) < 10 ? val.toFixed(1) : Math.round(val);
-  document.getElementById(id).textContent = `${prefix}${Math.abs(formatted)} ${suffix}`;
-}
-function updateRatio(v) {
-  const ratios = [1.1,1.5,2,3,4,6,8,10,20];
-  const r = ratios[Math.min(Math.floor(v/3), ratios.length-1)];
-  document.getElementById('dynRatio').textContent = `${r}:1`;
-}
+// updateParam/updateRatio replaced by populateDetailPanel live rendering
 
 // ── BUS SENDS ───────────────────────────────────────
-function renderBusSends() {
-  const container = document.getElementById('busSends');
-  const sends = ['MIX 1','MIX 2','MIX 3','MIX 4','FX 1','FX 2'];
-  container.innerHTML = sends.map((name, i) => `
-    <div class="param-item">
-      <div class="param-item-label">${name}</div>
-      <div class="param-item-val" id="send-${i}">0.0 dB</div>
-      <input type="range" class="param-slider" min="0" max="100" value="${40+Math.random()*20|0}"
-        oninput="updateSend(${i}, this.value)">
-    </div>
-  `).join('');
-}
-function updateSend(i, v) {
-  const db = (v/100 * 70 - 60).toFixed(1);
-  document.getElementById(`send-${i}`).textContent = `${db >= 0 ? '+' : ''}${db} dB`;
-}
+// renderBusSends replaced by populateDetailPanel
 
 // ── LAYER TABS ───────────────────────────────────────
 // layer tab clicks are handled by selectTab() inline onclick
@@ -1342,10 +1612,33 @@ function updateSend(i, v) {
 // ── VIEW SWITCHER ───────────────────────────────────
 function setView(v) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  const btns = document.querySelectorAll('.nav-btn');
-  const idx = ['mixer','routing','recording','settings'].indexOf(v);
-  if (btns[idx]) btns[idx].classList.add('active');
+  const btn = document.getElementById(`nav-${v}`);
+  if (btn) btn.classList.add('active');
+  // Future: swap main panel content per view
 }
+
+// ── THEME TOGGLE ──────────────────────────────────────
+function toggleTheme() {
+  const isLight = document.documentElement.classList.toggle('light');
+  _applyThemeIcon(isLight);
+  try { localStorage.setItem('wing-theme', isLight ? 'light' : 'dark'); } catch(e) {}
+}
+
+function _applyThemeIcon(isLight) {
+  const moon = document.getElementById('iconMoon');
+  const sun  = document.getElementById('iconSun');
+  if (moon) moon.style.display = isLight ? 'none'  : 'block';
+  if (sun)  sun.style.display  = isLight ? 'block' : 'none';
+}
+
+// Apply saved theme on load (before first paint — class only, icon fixed after DOM)
+(function() {
+  try {
+    if (localStorage.getItem('wing-theme') === 'light') {
+      document.documentElement.classList.add('light');
+    }
+  } catch(e) {}
+})();
 // selectLayer is now defined above in the mixer model section
 
 // ── WEBSOCKET AUTO-CONNECT ───────────────────────────
@@ -1364,6 +1657,8 @@ function connectWebSocket() {
       document.getElementById('wsDot')?.classList.remove('offline');
       const lbl = document.getElementById('wsLabel');
       if (lbl) lbl.textContent = 'Server Online';
+      // Immediately fetch current Wing status — don't wait for next probe cycle
+      fetchAndApplyStatus();
     };
     state.ws.onclose = () => {
       console.warn('[WING Remote] WebSocket closed — retrying in 3s');
@@ -1394,6 +1689,8 @@ function toggleConnect() {
     body: JSON.stringify({ wing_ip: ip, wing_osc_port: port }),
   }).then(r => r.json()).then(d => {
     console.log('[WING Remote] Config applied', d);
+    // Immediately refresh status display — new IP takes effect right away
+    setTimeout(fetchAndApplyStatus, 800);
   }).catch(e => console.warn('Config apply failed', e));
 
   // Show "probing…" state
@@ -1402,6 +1699,22 @@ function toggleConnect() {
 }
 
 // ── WING CONNECTION STATUS ───────────────────────────
+
+// Poll /api/status immediately on load/reconnect — don't wait for probe loop
+async function fetchAndApplyStatus() {
+  try {
+    const r    = await fetch('/api/status');
+    const data = await r.json();
+    applyWingStatus(data.wing_connected, data.wing_ip, data.wing_port);
+    const ipEl   = document.getElementById('wingIP');
+    const portEl = document.getElementById('wingPort');
+    if (ipEl   && data.wing_ip)   ipEl.value   = data.wing_ip;
+    if (portEl && data.wing_port) portEl.value = data.wing_port;
+  } catch(e) {
+    console.warn('[WING Remote] Could not fetch status:', e);
+  }
+}
+
 function applyWingStatus(connected, ip, port) {
   state.connected = connected;
 
@@ -1488,11 +1801,13 @@ function handleServerMessage(msg) {
       Object.entries(data).forEach(([ch, d]) => {
         const i = parseInt(ch) - 1;
         if (i < 0 || i >= arr.length) return;
-        if (d.fader !== undefined) arr[i].fader = d.fader;
-        if (d.mute  !== undefined) arr[i].muted = d.mute;
-        if (d.pan   !== undefined) arr[i].pan   = d.pan;
-        if (d.name  !== undefined && d.name !== '') arr[i].name = d.name;
-        // Seed meter targets
+        if (d.fader      !== undefined) arr[i].fader      = d.fader;
+        if (d.mute       !== undefined) arr[i].muted      = d.mute;
+        if (d.pan        !== undefined) arr[i].pan        = d.pan;
+        if (d.name       !== undefined && d.name !== '') arr[i].name = d.name;
+        if (d.solo       !== undefined) arr[i].solo       = d.solo;
+        if (d.gateActive !== undefined) arr[i].gateActive = d.gateActive;
+        if (d.dynActive  !== undefined) arr[i].dynActive  = d.dynActive;
         // Seed meter as initial fallback (overwritten by real Wing binary meter data)
       });
     });
@@ -1508,16 +1823,16 @@ function handleServerMessage(msg) {
     const i = parseInt(msg.ch) - 1;
     if (i >= 0 && state[arrKey]?.[i]) {
       state[arrKey][i].fader = msg.value;
-      // Update DOM if strip is currently visible
-      const key = `${msg.strip}-${msg.ch}`;
+      // Fast in-place DOM update for smooth fader movement
+      const key    = `${msg.strip}-${msg.ch}`;
       const fill   = document.getElementById(`fader-fill-${key}`);
       const handle = document.getElementById(`fader-handle-${key}`);
       const dbEl   = document.getElementById(`fader-db-${key}`);
-      if (fill)   fill.style.height   = (msg.value * 100) + '%';
-      if (handle) handle.style.bottom = `calc(${msg.value * 100}% - 7px)`;
-      if (dbEl)   dbEl.textContent    = faderToDb(msg.value);
-      // Update meter target
-      // Don't overwrite real meter data with fader position — binary engine handles this
+      if (fill)   { fill.style.height   = (msg.value * 100) + '%'; }
+      if (handle) { handle.style.bottom = `calc(${msg.value * 100}% - 7px)`; }
+      if (dbEl)   { dbEl.textContent    = faderToDb(msg.value); }
+      // If no DOM element found, strip isn't rendered — refresh it
+      if (!fill) refreshStripIfVisible(msg.strip, parseInt(msg.ch));
     }
   } else if (type === 'mute') {
     const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
@@ -1525,10 +1840,14 @@ function handleServerMessage(msg) {
     const i = parseInt(msg.ch) - 1;
     if (i >= 0 && state[arrKey]?.[i]) {
       state[arrKey][i].muted = msg.value;
-      const key = `${msg.strip}-${msg.ch}`;
+      const key     = `${msg.strip}-${msg.ch}`;
       const stripEl = document.getElementById(`strip-${key}`);
-      stripEl?.classList.toggle('muted', msg.value);
-      stripEl?.querySelector('.mute-btn')?.classList.toggle('active', msg.value);
+      if (stripEl) {
+        stripEl.classList.toggle('muted', msg.value);
+        stripEl.querySelector('.mute-btn')?.classList.toggle('active', msg.value);
+      } else {
+        refreshStripIfVisible(msg.strip, parseInt(msg.ch));
+      }
       if (msg.value) meterTargets[key] = 0;
     }
   } else if (type === 'pan') {
@@ -1538,7 +1857,8 @@ function handleServerMessage(msg) {
     if (i >= 0 && state[arrKey]?.[i]) {
       state[arrKey][i].pan = msg.value;
       const knob = document.getElementById(`pan-${msg.strip}-${msg.ch}`);
-      if (knob) knob.style.transform = `rotate(${msg.value * 135}deg)`;
+      if (knob) { knob.style.transform = `rotate(${msg.value * 135}deg)`; }
+      else      { refreshStripIfVisible(msg.strip, parseInt(msg.ch)); }
     }
   } else if (type === 'wing_status') {
     // Auto-connection status from backend probe loop
@@ -1551,19 +1871,18 @@ function handleServerMessage(msg) {
     if (handle) handle.style.bottom = `calc(${msg.value * 100}% - 7px)`;
     if (dbEl)   dbEl.textContent    = faderToDb(msg.value);
   } else if (type === 'name') {
-    // Name update from Wing — apply to the correct strip array
     const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
     const arrKey = sectionMap[msg.strip];
     if (arrKey) {
       const i = parseInt(msg.ch) - 1;
       if (i >= 0 && state[arrKey]?.[i]) {
-        state[arrKey][i].name = msg.value || state[arrKey][i].name;
-        // Update DOM if strip is currently visible
+        const newName = msg.value || state[arrKey][i].name;
+        state[arrKey][i].name = newName;
         const nameEl = document.getElementById(`name-${msg.strip}-${msg.ch}`);
-        if (nameEl && msg.value) nameEl.textContent = msg.value;
+        if (nameEl) { nameEl.textContent = newName; }
+        else        { refreshStripIfVisible(msg.strip, parseInt(msg.ch)); }
       }
     }
-    // Update detail panel if this is the selected channel
     if (msg.strip === state.selectedStripType &&
         parseInt(msg.ch) - 1 === state.selectedChannel) {
       if (msg.value) document.getElementById('detailTitle').textContent = msg.value;
@@ -1574,8 +1893,76 @@ function handleServerMessage(msg) {
     const i = parseInt(msg.ch) - 1;
     if (i >= 0 && state[arrKey]?.[i]) {
       state[arrKey][i].solo = msg.value;
-      document.getElementById(`strip-${msg.strip}-${msg.ch}`)
-        ?.querySelector('.solo-btn')?.classList.toggle('active', msg.value);
+      const soloBtn = document.getElementById(`strip-${msg.strip}-${msg.ch}`)
+                               ?.querySelector('.solo-btn');
+      if (soloBtn) { soloBtn.classList.toggle('active', msg.value); }
+      else         { refreshStripIfVisible(msg.strip, parseInt(msg.ch)); }
+    }
+  } else if (type === 'eq_on') {
+    const smap = {ch:'channels',aux:'aux',bus:'buses',main:'mains'};
+    const arr = state[smap[msg.strip]];
+    if (arr) {
+      const ch = arr[parseInt(msg.ch)-1];
+      if (ch) { ch.eq = ch.eq || {}; ch.eq.on = msg.value; }
+    }
+    if (msg.strip===state.selectedStripType && parseInt(msg.ch)-1===state.selectedChannel) {
+      const badge = document.getElementById('eq-on-badge');
+      if (badge) { badge.textContent=msg.value?'ON':'OFF';
+        badge.style.color=msg.value?'var(--cyan)':'var(--text-muted)'; }
+    }
+  } else if (type === 'eq_band') {
+    const smap = {ch:'channels',aux:'aux',bus:'buses',main:'mains'};
+    const arr = state[smap[msg.strip]];
+    if (arr) {
+      const ch = arr[parseInt(msg.ch)-1];
+      if (ch) {
+        ch.eq = ch.eq || {on:false, bands:[]};
+        while (ch.eq.bands.length < msg.band) ch.eq.bands.push({g:0,f:1000,q:0.7});
+        ch.eq.bands[msg.band-1][msg.attr] = msg.value;
+      }
+    }
+    // Refresh detail panel if this channel is selected
+    if (msg.strip===state.selectedStripType && parseInt(msg.ch)-1===state.selectedChannel) {
+      const layer = LAYERS[state.selectedStripType];
+      if (layer) {
+        const ch = layer.strips()[state.selectedChannel];
+        if (ch) populateDetailPanel(ch, state.selectedStripType);
+      }
+    }
+  } else if (type === 'dyn') {
+    const smap = {ch:'channels',aux:'aux',bus:'buses',main:'mains'};
+    const arr = state[smap[msg.strip]];
+    if (arr) {
+      const ch = arr[parseInt(msg.ch)-1];
+      if (ch) ch.dyn = msg.dyn;
+    }
+    if (msg.strip===state.selectedStripType && parseInt(msg.ch)-1===state.selectedChannel) {
+      const layer = LAYERS[state.selectedStripType];
+      if (layer) { const ch=layer.strips()[state.selectedChannel]; if(ch) populateDetailPanel(ch,msg.strip); }
+    }
+  } else if (type === 'gate') {
+    const arr = state.channels;
+    const i = parseInt(msg.ch)-1;
+    if (msg.strip==='ch' && arr[i]) arr[i].gate = msg.gate;
+    if (msg.strip==='aux' && state.aux[i]) state.aux[i].gate = msg.gate;
+    if (msg.strip===state.selectedStripType && i===state.selectedChannel) {
+      const layer = LAYERS[state.selectedStripType];
+      if (layer) { const ch=layer.strips()[i]; if(ch) populateDetailPanel(ch,msg.strip); }
+    }
+  } else if (type === 'send') {
+    const smap = {ch:'channels',aux:'aux'};
+    const arr = state[smap[msg.strip]];
+    if (arr) {
+      const ch = arr[parseInt(msg.ch)-1];
+      if (ch) { ch.sends = ch.sends||{}; ch.sends[msg.bus] = msg.send; }
+    }
+    if (msg.strip===state.selectedStripType && parseInt(msg.ch)-1===state.selectedChannel) {
+      // Update just the specific send row
+      const lvlEl = document.querySelector(`#busSends .param-item:nth-child(${msg.bus})`);
+      if (!lvlEl) { // full refresh if can't find row
+        const layer = LAYERS[state.selectedStripType];
+        if (layer) { const ch=layer.strips()[state.selectedChannel]; if(ch) populateDetailPanel(ch,msg.strip); }
+      }
     }
   } else if (type === 'record_status') {
     if (msg.status === 'recording') {
@@ -1635,8 +2022,14 @@ function endTouchFader() {
 // ── INIT ─────────────────────────────────────────────
 initChannels();
 animateWaveform();
+// Apply saved theme icon now that SVG elements exist in DOM
+try {
+  _applyThemeIcon(localStorage.getItem('wing-theme') === 'light');
+} catch(e) {}
 // Connect WebSocket to backend immediately on page load
 connectWebSocket();
+// Also fetch status via REST immediately — WebSocket wing_status may take 5-15s
+setTimeout(fetchAndApplyStatus, 500);
 setTimeout(() => {
   selectChannel(0, 'ch');
   drawDynGraph(-18, 4);
@@ -2177,9 +2570,7 @@ async function checkAndLaunchWizard() {
 }
 
 // Nav button: add to topbar
-document.querySelector('.topbar-nav').insertAdjacentHTML('beforeend',
-  '<button class="nav-btn" onclick="openWizard()" style="color:var(--amber)">⚙ Setup</button>'
-);
+// Setup button is now part of the static topbar HTML
 
 // ── Detection ─────────────────────────────────────────────────────────
 async function runDetection() {
