@@ -389,6 +389,15 @@ def build_dispatcher() -> Dispatcher:
     # Matrix 1..8
     d.map("/mtx/*/fdr",  handle_mtx_fader)
     d.map("/mtx/*/mute", handle_mtx_mute)
+    d.map("/mtx/*/pan",  handle_mtx_pan)
+    d.map("/mtx/*/name", handle_mtx_name)
+
+    # Solo for aux/bus/main/mtx (read-only state pushed by Wing)
+    d.map("/aux/*/$solo",  handle_aux_solo)
+    d.map("/bus/*/$solo",  handle_bus_solo)
+    d.map("/main/*/$solo", handle_main_solo)
+    d.map("/mtx/*/$solo",  handle_mtx_solo)
+    d.map("/dca/*/$solo",  handle_dca_solo)
 
     # DCA 1..16
     d.map("/dca/*/fdr",  handle_dca_fader)
@@ -551,6 +560,55 @@ def handle_mtx_mute(address, *args):
     asyncio.create_task(broadcast({"type": "mute", "strip": "mtx", "ch": n, "value": muted}))
 
 # DCA handlers
+def handle_mtx_pan(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = parse_wing_pan(args)
+    app_state.mixer["matrix"].setdefault(n, {})["pan"] = val
+    asyncio.create_task(broadcast({"type": "pan", "strip": "mtx", "ch": n, "value": val}))
+
+def handle_mtx_name(address, *args):
+    n = _ch_num(address)
+    if not n or not args: return
+    name = str(args[0]) if args else ""
+    app_state.mixer["matrix"].setdefault(n, {})["name"] = name
+    asyncio.create_task(broadcast({"type": "name", "strip": "mtx", "ch": n, "value": name}))
+
+def handle_aux_solo(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["aux"].setdefault(n, {})["solo"] = val
+    asyncio.create_task(broadcast({"type": "solo", "strip": "aux", "ch": n, "value": val}))
+
+def handle_bus_solo(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["buses"].setdefault(n, {})["solo"] = val
+    asyncio.create_task(broadcast({"type": "solo", "strip": "bus", "ch": n, "value": val}))
+
+def handle_main_solo(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["main"].setdefault(n, {})["solo"] = val
+    asyncio.create_task(broadcast({"type": "solo", "strip": "main", "ch": n, "value": val}))
+
+def handle_mtx_solo(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["matrix"].setdefault(n, {})["solo"] = val
+    asyncio.create_task(broadcast({"type": "solo", "strip": "mtx", "ch": n, "value": val}))
+
+def handle_dca_solo(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["dca"].setdefault(n, {})["solo"] = val
+    asyncio.create_task(broadcast({"type": "solo", "strip": "dca", "ch": n, "value": val}))
+
 def handle_dca_fader(address, *args):
     n = _ch_num(address)
     if not n: return
@@ -1049,19 +1107,28 @@ async def bulk_query_wing():
 
     # Aux inputs 1..8
     for n in range(1, QUERY_AUX + 1):
-        queries += [f"/aux/{n}/name", f"/aux/{n}/fdr", f"/aux/{n}/mute", f"/aux/{n}/pan"]
+        queries += [f"/aux/{n}/name", f"/aux/{n}/fdr", f"/aux/{n}/mute",
+                    f"/aux/{n}/pan",  f"/aux/{n}/$solo"]
 
     # Mix buses 1..16
     for n in range(1, QUERY_BUSES + 1):
-        queries += [f"/bus/{n}/name", f"/bus/{n}/fdr", f"/bus/{n}/mute", f"/bus/{n}/pan"]
+        queries += [f"/bus/{n}/name", f"/bus/{n}/fdr", f"/bus/{n}/mute",
+                    f"/bus/{n}/pan",  f"/bus/{n}/$solo"]
 
     # Mains 1..4
     for n in range(1, QUERY_MAINS + 1):
-        queries += [f"/main/{n}/name", f"/main/{n}/fdr", f"/main/{n}/mute", f"/main/{n}/pan"]
+        queries += [f"/main/{n}/name", f"/main/{n}/fdr", f"/main/{n}/mute",
+                    f"/main/{n}/pan",  f"/main/{n}/$solo"]
+
+    # Matrix 1..8
+    QUERY_MATRIX = 8
+    for n in range(1, QUERY_MATRIX + 1):
+        queries += [f"/mtx/{n}/name", f"/mtx/{n}/fdr", f"/mtx/{n}/mute",
+                    f"/mtx/{n}/pan",  f"/mtx/{n}/$solo"]
 
     # DCA 1..16
     for n in range(1, QUERY_DCA + 1):
-        queries += [f"/dca/{n}/name", f"/dca/{n}/fdr", f"/dca/{n}/mute"]
+        queries += [f"/dca/{n}/name", f"/dca/{n}/fdr", f"/dca/{n}/mute", f"/dca/{n}/$solo"]
 
     log.info(f"Sending {len(queries)} OSC queries to Wing…")
 
@@ -1128,28 +1195,46 @@ def _nrp_escape(data: bytes) -> bytes:
     return bytes(out)
 
 
-def _build_meter_request(udp_port: int, report_id: int, num_channels: int) -> bytes:
+# Strip type tokens and counts — from official Wing V3.1.0 docs Table 4
+METER_STRIP_SPECS = [
+    # (type_token, count, strip_key)  — order matters: Wing returns in request order
+    (0xa0, 40, "ch"),    # channels 1..40
+    (0xa1,  8, "aux"),   # aux inputs 1..8
+    (0xa2, 16, "bus"),   # mix buses 1..16
+    (0xa3,  4, "main"),  # mains 1..4
+    (0xa4,  8, "mtx"),   # matrix 1..8
+    (0xa5, 16, "dca"),   # DCA groups 1..16
+]
+# Pre-compute total strip count and ordered metadata for the parser
+METER_STRIP_ORDER: list = []   # [(strip_key, 1-based-id), ...]
+for _tok, _cnt, _key in METER_STRIP_SPECS:
+    for _n in range(1, _cnt + 1):
+        METER_STRIP_ORDER.append((_key, _n))
+METER_TOTAL_STRIPS = len(METER_STRIP_ORDER)
+
+
+def _build_meter_request(udp_port: int, report_id: int) -> bytes:
     """
     Build the binary meter subscription packet for Wing channel 3.
-    Requests output_L + output_R for all channels 1..num_channels.
+    Requests all strip types: channels, aux, bus, main, matrix, DCA.
+    Wing returns meter data in exactly the order requested.
     """
-    # Channel select: switch to channel 3 (meters)
+    # Select channel 3 (meters) in NRP framing
     select_ch3 = bytes([0xDF, 0xD3])
 
     # Token 0xD3: declare UDP return port (2 bytes big-endian)
-    port_hi = (udp_port >> 8) & 0xFF
-    port_lo = udp_port & 0xFF
+    port_hi  = (udp_port >> 8) & 0xFF
+    port_lo  = udp_port & 0xFF
     set_port = _nrp_escape(bytes([0xD3, port_hi, port_lo]))
 
     # Token 0xD4: report id (4 bytes big-endian)
-    id_bytes = report_id.to_bytes(4, 'big')
-    set_id = _nrp_escape(bytes([0xD4]) + id_bytes)
+    set_id = _nrp_escape(bytes([0xD4]) + report_id.to_bytes(4, 'big'))
 
-    # Meter collection: 0xDC ... 0xDE
-    # 0xA0 <idx> = channel strip, idx is 0-based
+    # Meter collection: 0xDC <type_token> <0-based-idx> ... 0xDE
     collection = bytearray([0xDC])
-    for ch in range(num_channels):
-        collection += bytes([0xA0, ch])
+    for type_token, count, _ in METER_STRIP_SPECS:
+        for idx in range(count):
+            collection += bytes([type_token, idx])
     collection += bytes([0xDE])
 
     return select_ch3 + set_port + set_id + _nrp_escape(bytes(collection))
@@ -1162,38 +1247,40 @@ def _build_meter_renew(report_id: int) -> bytes:
     return select_ch3 + _nrp_escape(bytes([0xD4]) + id_bytes)
 
 
-def _parse_meter_udp(data: bytes, num_channels: int) -> dict:
+def _parse_meter_udp(data: bytes) -> dict:
     """
-    Parse a Wing meter UDP packet.
-    Format: 4-byte report_id + (8 words × 2 bytes) per channel
-    Words per channel: in_L, in_R, out_L, out_R, gate_key, gate_gain, dyn_key, dyn_gain
-    We use out_L (word index 2) as the primary level — post-fader output.
-    Returns dict {"1": 0.75, "2": 0.3, ...} in 0.0–1.0 range.
+    Parse a Wing meter UDP packet containing all requested strip types.
+    Format: 4-byte report_id + (8 words × 2 bytes) per strip, in request order.
+    Words per strip: in_L, in_R, out_L, out_R, gate_key, gate_gain, dyn_key, dyn_gain
+    We use out_L (word index 2, byte offset 4) as the primary VU level.
+    Returns dict {"ch-1": 0.75, "aux-2": 0.4, "bus-1": 0.6, ...} in 0.0–1.0 range.
+    DCA strips have no audio output level, so we return 0.0 for them.
     """
     if len(data) < 4:
         return {}
 
-    # Skip 4-byte report ID
-    payload    = data[4:]
-    words_per  = 8          # 8 signed int16 words per channel strip
-    bytes_per  = words_per * 2
-    result     = {}
+    payload   = data[4:]   # skip 4-byte report ID
+    WORDS     = 8          # words per strip
+    BYTES     = WORDS * 2  # 16 bytes per strip
+    result    = {}
 
-    for ch in range(min(num_channels, len(payload) // bytes_per)):
-        offset   = ch * bytes_per
-        chunk    = payload[offset : offset + bytes_per]
-        if len(chunk) < bytes_per:
+    for strip_idx, (strip_key, strip_num) in enumerate(METER_STRIP_ORDER):
+        offset = strip_idx * BYTES
+        if offset + BYTES > len(payload):
             break
+        chunk = payload[offset : offset + BYTES]
 
-        # Word 2 = output_L (post-fader left level)
-        raw   = int.from_bytes(chunk[4:6], 'big', signed=True)
-        db    = raw / 256.0      # convert from 1/256 dB units to dB
+        # DCA groups carry fader-level data, not audio, skip level for them
+        if strip_key == "dca":
+            result[f"dca-{strip_num}"] = 0.0
+            continue
 
-        # Map dB to 0.0–1.0:  -60 dB → 0.0,  0 dB → 1.0  (log-linear feel)
+        # Word 2 = output_L (post-fader left level), bytes [4:6]
+        raw     = int.from_bytes(chunk[4:6], 'big', signed=True)
+        db      = raw / 256.0
         clamped = max(-60.0, min(0.0, db))
-        level   = (clamped + 60.0) / 60.0
-
-        result[str(ch + 1)] = round(level, 4)
+        level   = round((clamped + 60.0) / 60.0, 4)
+        result[f"{strip_key}-{strip_num}"] = level
 
     return result
 
@@ -1252,11 +1339,11 @@ async def meter_engine():
 
         # ── Send initial meter subscription ──────────────────────────────
         try:
-            req = _build_meter_request(METER_UDP_PORT, METER_REPORT_ID, METER_CHANNELS)
+            req = _build_meter_request(METER_UDP_PORT, METER_REPORT_ID)
             tcp_writer.write(req)
             await tcp_writer.drain()
             last_renew = asyncio.get_event_loop().time()
-            log.info(f"Meter subscription sent for {METER_CHANNELS} channels")
+            log.info(f"Meter subscription sent ({METER_TOTAL_STRIPS} strips: ch/aux/bus/main/mtx/dca)")
         except Exception as e:
             log.warning(f"Meter subscription send failed: {e}")
             tcp_writer.close()
@@ -1281,12 +1368,12 @@ async def meter_engine():
                 try:
                     data, _ = udp_sock.recvfrom(4096)
                     if data:
-                        levels = _parse_meter_udp(data, METER_CHANNELS)
+                        levels = _parse_meter_udp(data)
                         if levels:
                             _live_meters.update(levels)
-                            # Broadcast to browser if clients connected
+                            # Broadcast all strip meter levels to browsers
                             if app_state.ws_clients:
-                                await broadcast({"type": "meters", "channels": levels})
+                                await broadcast({"type": "meters", "levels": levels})
                 except BlockingIOError:
                     pass  # No data yet — normal
                 except Exception as e:

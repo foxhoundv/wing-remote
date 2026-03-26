@@ -962,10 +962,11 @@ function createMasterStrip() {
 // We smooth-interpolate toward target values each animation frame.
 const meterTargets = {};  // { "1": 0.75, ... } keyed by 1-based channel number
 
-function applyMeterValues(channelMap) {
-  // channelMap from backend: { "1": 0.75, ... } keyed by 1-based ch number (channels only for now)
-  Object.entries(channelMap).forEach(([ch, val]) => {
-    meterTargets[`ch-${ch}`] = Math.max(0, Math.min(1, val));
+function applyMeterValues(levels) {
+  // levels: { "ch-1": 0.75, "aux-3": 0.4, "bus-1": 0.6, ... }
+  // Keys are already in "stripType-id" format from the backend parser.
+  Object.entries(levels).forEach(([key, val]) => {
+    meterTargets[key] = Math.max(0, Math.min(1, val));
   });
 }
 
@@ -984,14 +985,16 @@ function animateMeters() {
 
     // Real values from Wing when connected, fake animation when not
     let target;
-    if (wingConnected && meterTargets[chKey] !== undefined) {
+    if (meterTargets[chKey] !== undefined) {
+      // Real hardware value from Wing meter engine (all strip types)
       target = meterTargets[chKey];
     } else if (!wingConnected) {
-      // Fake oscillating animation when disconnected
+      // Wing not connected — show fake animation so UI looks alive
       const t = Date.now() / 1000;
       target = ch.muted ? 0 : ch.fader * (0.5 + 0.3 * Math.sin(t * 2.1 + ch.id));
     } else {
-      target = ch.muted ? 0 : ch.fader * 0.5;
+      // Connected but no meter data yet — show nothing
+      target = 0;
     }
 
     const current = ch.meter[0] || 0;
@@ -1490,14 +1493,15 @@ function handleServerMessage(msg) {
         if (d.pan   !== undefined) arr[i].pan   = d.pan;
         if (d.name  !== undefined && d.name !== '') arr[i].name = d.name;
         // Seed meter targets
-        if (d.fader !== undefined) meterTargets[`${stype}-${ch}`] = d.mute ? 0 : d.fader * 0.7;
+        // Seed meter as initial fallback (overwritten by real Wing binary meter data)
       });
     });
     // Re-render current layer to reflect new values
     renderCurrentStrips();
   } else if (type === 'meters') {
-    // Real meter values from Wing (fader positions or future native meter data)
-    applyMeterValues(msg.channels || {});
+    // Real hardware VU levels from Wing binary meter protocol
+    // msg.levels: { "ch-1": 0.75, "aux-1": 0.4, "bus-1": 0.6, ... }
+    applyMeterValues(msg.levels || msg.channels || {});
   } else if (type === 'fader') {
     const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
     const arrKey = sectionMap[msg.strip] || 'channels';
@@ -1513,7 +1517,7 @@ function handleServerMessage(msg) {
       if (handle) handle.style.bottom = `calc(${msg.value * 100}% - 7px)`;
       if (dbEl)   dbEl.textContent    = faderToDb(msg.value);
       // Update meter target
-      if (!state[arrKey][i].muted) meterTargets[key] = msg.value * 0.7;
+      // Don't overwrite real meter data with fader position — binary engine handles this
     }
   } else if (type === 'mute') {
     const sectionMap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
@@ -1563,6 +1567,15 @@ function handleServerMessage(msg) {
     if (msg.strip === state.selectedStripType &&
         parseInt(msg.ch) - 1 === state.selectedChannel) {
       if (msg.value) document.getElementById('detailTitle').textContent = msg.value;
+    }
+  } else if (type === 'solo') {
+    const smap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix',dca:'dca'};
+    const arrKey = smap[msg.strip] || 'channels';
+    const i = parseInt(msg.ch) - 1;
+    if (i >= 0 && state[arrKey]?.[i]) {
+      state[arrKey][i].solo = msg.value;
+      document.getElementById(`strip-${msg.strip}-${msg.ch}`)
+        ?.querySelector('.solo-btn')?.classList.toggle('active', msg.value);
     }
   } else if (type === 'record_status') {
     if (msg.status === 'recording') {
