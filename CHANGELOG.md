@@ -5,6 +5,161 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.1.0] — 2026-03-26
+
+### Added
+
+#### Channel Settings Panel
+- Clicking any channel name strip now opens a full-screen Wing-style channel
+  editor that replaces the center area. A back arrow and channel name header
+  are shown at the top; all changes are sent to the Wing via OSC immediately
+  with no Save button required.
+- **Left nav rail** with nine sections, each showing a mini-thumbnail canvas
+  preview of the current state (EQ curve, gate transfer line, compressor curve,
+  bus send bars, pan puck, gain bar, color swatch):
+  - **Home** — four horizontal tabs: Overview, Icon/Color, Name, Tags
+  - **Gain** — Channel Input (gain slider, +48V / Pad / Invert toggles), Trim &
+    Balance, Filter (Lo-Cut / Hi-Cut / Tilt EQ on/off)
+  - **Gate** — ON/OFF toggle, transfer curve canvas (blue when active), threshold /
+    range / attack / release sliders
+  - **EQ** — ON/OFF toggle, full-width frequency response canvas, six band tabs
+    (Low Shelf, PEQ 1–4, High Shelf) each with per-band gain / frequency (log-scale)
+    / Q sliders; Lo-Cut and Hi-Cut filter enable toggles on shelf bands; EQ graph
+    redraws on every slider movement
+  - **Dynamics** — ON/OFF toggle, compressor transfer curve (threshold / ratio /
+    knee), and a separate Envelope canvas showing attack (left slope) / hold (flat top)
+    / release (right slope) as a trapezoid with control point circles
+  - **Insert 1 / Insert 2** — FX processor ON/OFF enable, slot type display
+  - **Main Sends** — four vertical faders (M1–M4) with fixed-width dB displays,
+    ON/OFF per send, and a horizontal L–R pan bar visualiser with a blue puck
+  - **Bus Sends** — 16 vertical channel strips with TAP toggle (PRE amber / POST blue),
+    fixed-width dB display, vertical fader, ON/OFF, and PAN LNK toggle; all 16
+    scroll horizontally
+
+#### View Pages (top nav)
+- **Recording view** now fully wired: Record button sends `record_start` /
+  `record_stop` WebSocket messages to the backend; timer counts from real
+  backend state; recorded files listed with download and delete buttons;
+  list reloads automatically when a recording stops
+- **Library view** — two-column layout showing recorded WAV files (with
+  download and delete) and scene snapshot slots
+- **Utility view** — live connection status panel (Wing IP, OSC port,
+  connected state, sample rate, bit depth, audio availability) fetched from
+  `/api/status`; Setup Wizard shortcut button; system version display
+- **Effects, Routing, Library** — display a 50% opaque greyed-out overlay with
+  the message *"This feature is in progress as a sub-project to be implemented
+  later. Thanks for stopping by!"*
+- **Meters view** — full-width VU grid for all 40 channels updated live from
+  the hardware meter engine at ~30 fps
+
+#### Frontend Refactor — Modular File Structure
+- The single 5,029-line `index.html` (212 KB) has been split into 13 focused
+  files — an 85% reduction in index.html size (now 728 lines / 32 KB):
+
+  ```
+  frontend/static/
+  ├── index.html           (728 lines — HTML structure only)
+  ├── css/
+  │   ├── main.css         (mixer UI, strips, meters, panels, ch-settings)
+  │   └── wizard.css       (setup wizard overlay)
+  └── js/
+      ├── state.js         (shared state, LAYERS config, constants)
+      ├── strips.js        (mixer model init, layer nav, strip rendering)
+      ├── meters.js        (meter animation, EQ canvas helpers)
+      ├── faders.js        (fader/knob drag, touch, mute/solo/rec)
+      ├── detail.js        (channel selection, detail panel)
+      ├── recording.js     (recording transport, waveform, param updaters)
+      ├── views.js         (setView, all view builders, theme toggle)
+      ├── osc.js           (WebSocket, OSC, Wing status, message handler, clock, init)
+      ├── wizard.js        (setup wizard)
+      └── ch-settings.js  (channel settings panel — all 9 sections)
+  ```
+
+- All 10 JS files pass Node.js syntax validation independently
+
+---
+
+### Fixed
+
+- **Fader levels not syncing from Wing hardware** — root cause: `WingOSCTransport`
+  (the UDP socket used to send OSC) was binding to an ephemeral port, so Wing
+  sent all GET replies and subscription push events back to that ephemeral port
+  rather than to the port our server was listening on. Fixed with a single
+  unified UDP socket that both sends *from* and receives *on* `LOCAL_OSC_PORT`
+  (2224), so Wing always replies to the right port.
+
+- **Fader dB conversion** — Wing's `/*S` subscription pushes fader values as
+  **dB** (e.g. `-3.0`), not raw 0–1. The old code clamped these to 0.0–1.0,
+  so every pushed fader read as zero. Fixed with `_wing_db_to_raw()` — a
+  piecewise linear converter derived from exact data points in the V3.1.0 docs:
+  `raw=0.675@-3dB`, `0.75@0dB`, `0.85@+4dB`, `0.923@+10dB`.
+
+- **No Master strip under Mains 1–4** — the `showMaster` flag was appending a
+  disconnected hardcoded strip and not rendering the real main strips. Removed
+  `showMaster`; main strips now render as normal strips with `main/1` styled as
+  the L/R master (wider border, orange accent).
+
+- **Port 8000 unreachable after BoundUDPClient change** — `BoundUDPClient`
+  called `sock.bind()` in `__init__`, then `AsyncIOOSCUDPServer` tried to bind
+  the same port. Even with `SO_REUSEPORT`, many Linux/Docker kernels block two
+  sockets sharing a UDP port. Fixed by replacing both with `WingOSCTransport` —
+  a single `asyncio.DatagramProtocol` that handles send and receive on one socket.
+
+- **Setup wizard and channel settings not loading** — a Python script used raw
+  strings with `\`` and `\${}` which wrote literal backslash-backtick and
+  backslash-dollar-brace sequences into the JS files. JavaScript template literals
+  interpret `\`` as an invalid escape and abort parsing, preventing all JS from
+  loading. Fixed by: (a) replacing `\`` occurrences with plain backticks, (b)
+  rewriting `_csEQRenderBandDetail` using `document.createElement` and
+  `addEventListener` instead of HTML string concatenation to avoid all quote/
+  escape conflicts.
+
+- **EQ toggle button showing literal `${eq.on?'on':''}` text** — `\\${` escaped
+  template expressions in `_csRenderEQ` and `_csEQRenderBandTabs` were rendering
+  as literal text. Fixed by scoped `\\${` → `${` replacement within those
+  function bodies.
+
+- **Gate ON/OFF toggle cleared section content** — `_csSendToggle` called
+  `_csShowSection` (which calls `_csRenderNavRail`) and then called
+  `_csRenderNavRail` again — the double render race cleared the DOM before
+  re-population. Fixed by rewriting `_csSendToggle` to render section content
+  directly without the cascading call chain.
+
+- **Pan visualiser in Main Sends non-functional** — replaced a non-interactive
+  circular scope with a horizontal L–R bar: a track with a blue puck that
+  physically moves as the pan slider changes, with a filled region and L/C/R
+  labels. The `_csMainPan` handler now calls `sendPan()` and redraws on every
+  input event.
+
+- **Main Sends dB column width shifting** — when send level showed `−∞` or a
+  multi-digit value (e.g. `−12.3 dB`) the column width changed. Fixed with a
+  fixed `width:52px` container and `overflow:hidden` on every dB display.
+
+- **44.1 kHz missing from wizard** — added `44100 Hz (CD Quality)` as the
+  first option in the Setup Wizard Step 4 sample rate dropdown.
+
+---
+
+### Changed
+
+- `_csDynParam` split into `_csDynParam` (transfer curve: threshold, ratio,
+  knee) and `_csDynEnvParam` (envelope: attack, hold, release) for clarity
+
+---
+
+### Infrastructure
+
+- **Docker `inflight` memory leak warning eliminated** — replaced the `docker-ce-cli`
+  apt package installation (which triggered an internal npm chain containing the
+  deprecated `inflight` package) with a direct download of the static Docker CLI
+  binary from Docker's release server. No npm is invoked at any point during
+  the build.
+- **`.npmrc` added** — sets `fund=false`, `audit=false`, `loglevel=error` as
+  a belt-and-suspenders guard against spurious npm warnings from Docker Buildkit
+  or Compose v2 host tooling.
+
+---
+
 ## [2.0.0] — 2026-03-26
 
 ### Overview
@@ -13,157 +168,36 @@ stack — OSC protocol implementation, mixer state model, strip rendering,
 meter engine, and UI — was rebuilt from scratch against the official
 **Behringer Wing Remote Protocols V3.1.0** documentation.
 
----
-
 ### Added
 
 #### Hardware Meter Engine
-- Implemented the Wing native **binary TCP protocol** (port 2222, Channel 3)
+- Implemented the Wing native binary TCP protocol (port 2222, Channel 3)
   for real hardware VU meter data
-- Subscribes to all strip types simultaneously: channels 1–40, aux 1–8,
-  buses 1–16, mains 1–4, matrix 1–8, DCA 1–16
-- Parses 2-byte signed big-endian meter words (1/256 dB units) per strip:
-  input L/R, output L/R, gate key, gate gain, dyn key, dyn gain
-- Subscription renewed every 4 seconds (Wing times out after 5 s)
-- Automatic TCP reconnect with exponential backoff on connection loss
-- Gate (G) and Dynamics (D) LED indicators on every channel strip, lit in
-  real time from hardware meter gate_key / dyn_key values
+- Subscribes to all strip types: channels 1–40, aux 1–8, buses 1–16,
+  mains 1–4, matrix 1–8, DCA 1–16
+- Parses 2-byte signed big-endian meter words (1/256 dB units) per strip
+- Subscription renewed every 4 seconds
+- Gate (G) and Dynamics (D) LED indicators lit in real time from hardware
+  meter gate_key / dyn_key values
 
 #### Full Strip Type Coverage
-- All six Wing strip types now fully implemented: **CH 1–40**, **AUX 1–8**,
-  **BUS 1–16**, **MAIN 1–4**, **MTX 1–8**, **DCA 1–16**
-- Sidebar navigation correctly switches the strip area between all types
-- Layer tabs paginate correctly within each type:
-  - CH: three tabs — 1–16, 17–32, 33–40
-  - BUS/DCA: two tabs of 8 each
-- All strip attributes (name, fader, mute, pan, solo) pulled from Wing on
-  connect and kept live via OSC subscription push
+- All six Wing strip types: CH 1–40, AUX 1–8, BUS 1–16, MAIN 1–4, MTX 1–8, DCA 1–16
+- Layer tabs: CH three tabs (1–16, 17–32, 33–40), BUS/DCA two tabs of 8 each
 
-#### Detail Panel — Live Hardware Values
-- Clicking any strip opens a detail panel populated with real Wing data:
-  - **Parametric EQ**: band count adapts per strip type (4 for channels,
-    6–8 for buses/mains); knob rotation, gain labels, frequency labels,
-    and ON/OFF badge all reflect hardware state
-  - **Compressor**: threshold, ratio, attack, release, make-up gain with
-    live values; sliders send OSC back to Wing; transfer curve redraws
-    from real threshold/ratio; ON/OFF badge lights blue
-  - **Gate / Expander**: threshold, range, attack, release; shown only for
-    strip types that have a gate (channels, aux); ON/OFF badge lights green
-  - **Bus Sends**: all 16 sends per channel with real level (dB) and
-    on/off state; tapping ON/OFF sends OSC toggle; sliders send level changes
+#### Detail Panel
+- EQ curves, compressor, gate, bus sends reflecting actual hardware state
+- Bulk state query (~3,200 OSC queries) on every browser connect
 
-#### Bulk State Query on Connect
-- On every browser connect and container startup, queries the full parameter
-  set for all strips: name, fader, mute, pan, solo, EQ (4 bands × g/f/q),
-  compressor (on/thr/ratio/att/rel/gain/knee), gate (on/thr/range/att/rel),
-  and all 16 bus send levels + on/off — ~3,200 OSC queries sent in batches
-- OSC dispatcher registers handlers for all parameter paths so replies
-  update the mixer state and re-render any currently visible strip
-
-#### Auto-Connect & Live Status
-- Backend `wing_probe_loop` probes the Wing with an OSC `/?` query every
-  5 s (disconnected) or 15 s (connected) and broadcasts `wing_status`
-  messages to all browsers
-- `fetchAndApplyStatus()` hits `/api/status` via REST on every page load,
-  WebSocket reconnect, and after wizard apply — status indicators and IP
-  field update within 500 ms, no waiting for the probe cycle
-- Wing IP/port changes applied live without container restart:
-  `WING_IP` and `WING_OSC_PORT` are now live-mutable functions backed by
-  module variables updated by `set_wing_target()`; `setup_apply` calls
-  this immediately so every subsequent probe and OSC send uses the new address
-
-#### Setup Wizard Improvements
-- Audio passthrough now uses `privileged: true` in docker-compose and an
-  `entrypoint.sh` that detects `/dev/snd` at runtime — container always
-  starts cleanly whether or not Wing USB is connected
-- `/dev/snd` passthrough toggle no longer patches docker-compose.yml
-  (which caused YAML corruption and "no such file or directory" errors)
-- Wizard audio step: toggle is always enabled; "NOT YET" amber badge
-  instead of disabled red "NOT FOUND"; Rescan button refreshes device
-  list without resetting the user's toggle choice
-- Wing IP changes take effect immediately after Apply — no restart needed
-
-#### Navigation
-- Top menu matches Wing touchscreen button order:
-  **Home · Effects · Meters · Routing · Library · Utility | Recording | Setup ⚙**
-- Vertical dividers separate the Wing-mirroring buttons from the
-  webapp-specific ones (Recording, Setup)
-- Setup button is amber and tooltips "Wing Remote settings only — does not
-  affect the Behringer Wing console"
-
-#### Light / Dark Mode
-- Full light theme with warm grey palette designed for bright environments
-- Toggle button (Material Design outline SVG icons: crescent moon / sun
-  with rays) positioned to the left of the OSC status indicator
-- Preference persisted to `localStorage`; applied before first paint to
-  avoid flash of wrong theme on page reload
-- All hardcoded dark hex colours overridden for light mode: fader tracks,
-  knobs, meter bars, strip LEDs, EQ/dynamics graphs, wizard panels
-
-#### WebSocket Message Types
-- `wing_status` — Wing connectivity state broadcast to all browsers
-- `eq_on`, `eq_band` — EQ enable and per-band parameter updates
-- `dyn` — compressor parameter block updates
-- `gate` — gate parameter block updates
-- `send` — bus send level/on updates
-- `meters` — hardware VU levels keyed `"ch-1"`, `"aux-3"`, `"bus-1"` etc.
-  including `"ch-1-r"` (right channel), `"ch-1-gate"`, `"ch-1-dyn"` state flags
-
----
+#### Other
+- Auto-connect with status updates within 500 ms of page load
+- Live IP/port change via Setup Wizard without container restart
+- Dark and light mode with Material Design SVG icons, persisted to localStorage
+- `/*S` subscription push events with correct dB→raw conversion
+- Wing probe loop broadcasting `wing_status` to all connected browsers
 
 ### Fixed
-
-- **OSC port**: Wing always uses port 2223 (not 2222 as originally coded)
-- **OSC paths**: corrected from X32 syntax (`/ch/01/mix/fader`) to Wing
-  syntax (`/ch/1/fdr`); mute from `/ch/01/mix/on` to `/ch/1/mute`
-- **Master path**: `/main/1/fdr` not `/main/st/fdr`
-- **Solo path**: `/ch/{n}/$solo` (dollar prefix required)
-- **Subscription command**: `/*S` not `/#456/*S` (that is a native binary hash)
-- **Mute semantics**: Wing `0` = unmuted, `1` = muted (was inverted)
-- **Meter values**: were fader positions from software state, now real
-  hardware post-fader output levels from the binary meter protocol
-- **Tab labels**: CH 17–24/25–32/33–40 corrected to CH 17–32/33–40
-- **Strip attribute sync**: WS handlers now call `refreshStripIfVisible()`
-  when the target DOM element is not found, so tab 2+ strips update
-  correctly without requiring a full re-render
-- **YAML corruption**: `apply_audio_passthrough` previously used regex
-  substitution on docker-compose.yml producing invalid indentation;
-  replaced with exact line-by-line sentinel matching, then replaced
-  entirely with `privileged: true` runtime detection approach
-- **Permission denied**: container ran as non-root user; bind-mounted
-  `.env` and `docker-compose.yml` were root-owned; fixed by running as root
-- **Entrypoint permission**: `chmod +x entrypoint.sh` added to Dockerfile
-  so the script is executable inside the image regardless of host filesystem
-- **Pan response parsing**: Wing returns pan as `float -100..100`; was
-  being treated as normalized `0..1`
-- **Snapshot apply**: all strip attributes (mute, pan, name, solo,
-  gateActive, dynActive) now applied from snapshot; previously only fader
-
----
-
-### Changed
-
-- Mixer state model expanded: each channel now stores `eq`, `dyn`, `gate`,
-  and `sends` objects alongside the basic `fader/mute/pan/name/solo`
-- `WING_IP` and `WING_OSC_PORT` refactored from module constants to
-  callable functions backed by mutable globals (`_wing_ip`, `_wing_port`)
-- Meter broadcast payload key renamed from `channels` to `levels` with
-  typed keys (`"ch-1"`, `"aux-2"`, etc.) covering all strip types
-- `docker-compose.yml` volumes: `recordings` and `snapshots` use
-  Docker-managed named volumes (no host bind-mount required)
-- Audio device passthrough: `devices:` block replaced by `privileged: true`
-  + runtime detection in `entrypoint.sh`
-
----
-
-### Removed
-
-- Fake oscillating VU meter animation when Wing is connected (retained only
-  when Wing is unreachable as a visual placeholder)
-- Static `renderBusSends()`, `updateParam()`, `updateRatio()` functions
-  replaced by `populateDetailPanel()` which reads live Wing state
-- X32-style OSC path normalisation shim (no longer needed)
-- Dynamic injection of Setup button via `insertAdjacentHTML` (now static HTML)
+- OSC port (2222→2223), paths (X32→Wing syntax), mute semantics, solo path,
+  subscription command, master path, tab labels, YAML corruption, pan parsing
 
 ---
 
@@ -171,59 +205,8 @@ meter engine, and UI — was rebuilt from scratch against the official
 
 - Basic FastAPI backend with OSC bridge and WebSocket hub
 - Single-page HTML UI with Wing-inspired dark theme
-- 16-channel strip display with fake placeholder VU meters
+- 16-channel strip display with placeholder VU meters
 - Setup Wizard (5 steps): environment detection, OSC test, audio config,
   recording format, apply
 - Multitrack WAV recording via sounddevice + soundfile
 - Docker + docker-compose deployment
-- Basic fader, mute, solo, pan controls via OSC
-
----
-
-## [2.0.1] — 2026-03-26
-
-### Fixed
-
-- **Gate ON/OFF toggle**: Toggling gate on/off caused the section content to disappear.
-  Root cause: `_csSendToggle` was calling `_csShowSection` (which itself calls `_csRenderNavRail`)
-  and then calling `_csRenderNavRail` again — the double render race cleared the DOM.
-  Fixed by rewriting `_csSendToggle` to render the section content directly without
-  the cascading call chain.
-
-- **EQ detail panel**: Replaced the simple 6-knob grid with full per-band detail:
-  - **Low Shelf**: Lo-Cut enable/disable toggle (with status indicator), Gain L slider,
-    Frequency L slider (log-scale 20 Hz–20 kHz)
-  - **PEQ 1–4**: Gain, Frequency, and Q (bandwidth) sliders per band with live dB/Hz labels
-  - **High Shelf**: Hi-Cut enable/disable toggle, Gain H slider, Frequency H slider
-  - Band selector tabs across the top with gain colour coding (green=boost, red=cut)
-  - Main EQ graph redraws on every parameter change; frequency uses proper log scale
-
-- **Dynamics envelope graph**: Added a working `ENVELOPE` canvas panel next to the
-  transfer curve. Attack adjusts the left rising slope, Hold expands/shrinks the flat
-  top, Release adjusts the right falling slope. Control point circles show at each
-  vertex. All three parameters are sliders connected to OSC sends.
-
-- **Main Sends pan visualiser**: The pan knob had no visual feedback. Replaced the
-  non-functional circular scope with a horizontal L–R bar: a track spanning the full
-  width with a blue puck that moves left/right as pan changes, filled region showing
-  the pan direction, and L/C/R labels.
-
-- **Main Sends fader column width**: When a send level displayed −∞ or a double-digit
-  dB value (e.g. −12.3 dB), the column would shift in width. Fixed by giving every
-  dB display a fixed `width:52px` container with `overflow:hidden`.
-
-- **Bus Sends layout**: Replaced the 4×4 grid with vertical channel strips (one per bus)
-  matching the look of the main mixer strips. Each bus strip now shows:
-  - Bus name
-  - **TAP** toggle (PRE / POST) — highlighted blue for POST, amber for PRE
-  - Fixed-width dB display
-  - Vertical fader
-  - ON/OFF toggle
-  - **PAN LNK** toggle (pan link on/off) — highlighted green when linked
-  All 16 buses scroll horizontally.
-
-### Changed
-
-- `_csDynParam` renamed to `_csDynEnvParam` for envelope-specific parameters
-  (attack, hold, release) to distinguish them from transfer-curve parameters
-  (threshold, ratio, knee) which use a separate handler.

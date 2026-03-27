@@ -40,15 +40,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     passwd \
     curl \
     ca-certificates \
-    && install -m 0755 -d /etc/apt/keyrings \
-    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
-    && chmod a+r /etc/apt/keyrings/docker.asc \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-       https://download.docker.com/linux/debian bookworm stable" \
-       > /etc/apt/sources.list.d/docker.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends docker-ce-cli \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && DOCKER_VERSION=27.3.1 \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://download.docker.com/linux/static/stable/${ARCH}/docker-${DOCKER_VERSION}.tgz" \
+       | tar -xz --strip-components=1 -C /usr/local/bin docker/docker \
+    && chmod +x /usr/local/bin/docker
 
 # Copy installed Python packages from builder
 COPY --from=builder /install /usr/local

@@ -1,7 +1,7 @@
-# WING Remote v2.0
+# WING Remote v2.1
 
-A self-hosted web application for remotely controlling a **Behringer Wing** digital mixer
-and recording multitrack audio — all from your browser, running in Docker.
+A self-hosted web application for remotely controlling a **Behringer Wing** digital
+mixer and recording multitrack audio — all from your browser, running in Docker.
 
 > Implements the official **Wing Remote Protocols V3.1.0** by Patrick-Gilles Maillot
 > (authorized by Behringer/Music Tribe).
@@ -14,14 +14,14 @@ and recording multitrack audio — all from your browser, running in Docker.
 |---|---|---|
 | 🎚 | **Full Mixer Control** | All 40 channels, 8 aux, 16 buses, 4 mains, 8 matrix, 16 DCA |
 | 📊 | **Real Hardware VU Meters** | Live levels via Wing binary TCP protocol (port 2222, Channel 3) |
-| 🎛 | **Live Detail Panel** | EQ curves, compressor, gate, bus sends — all reflecting actual hardware state |
-| 🔄 | **Bidirectional Sync** | Wing→browser push via /*S OSC subscription; bulk query on connect |
+| 🎛 | **Channel Settings** | Full per-channel editor: EQ, Dynamics, Gate, Gain, Inserts, Bus/Main Sends |
+| 🔄 | **Bidirectional Sync** | Wing→browser push via `/*S` subscription; bulk query on connect |
 | 💡 | **Gate / Dyn LEDs** | Per-strip G and D indicators lit from hardware meter gate_key / dyn_key |
-| 🌙 | **Dark & Light Mode** | Toggle with Material Design SVG icons; preference persisted across sessions |
+| 🌙 | **Dark & Light Mode** | Toggle with Material Design SVG icons; preference persisted |
 | ⚙ | **Setup Wizard** | In-app OSC test, audio detection, live IP change — no restart required |
-| 🎙 | **Multitrack Recording** | Up to 32 channels @ 48 kHz / 32-bit float WAV via USB audio |
-| 🐳 | **Docker** | Single docker compose up --build deployment |
-| 🔌 | **Auto-Connect** | Status indicators update within 500 ms of page load — no button press needed |
+| 🎙 | **Multitrack Recording** | Up to 32 channels @ 44.1 / 48 / 96 kHz WAV via USB audio |
+| 🐳 | **Docker** | Single `docker compose up --build` deployment |
+| 🔌 | **Auto-Connect** | Status indicators update within 500 ms of page load |
 
 ---
 
@@ -61,15 +61,63 @@ LOCAL_OSC_PORT=2224    # port this server listens on for Wing push events
 METER_UDP_PORT=2225    # port Wing sends hardware meter data to
 ```
 
-IP changes made through the Setup Wizard take effect **immediately** — the
-backend updates the live OSC client and restarts the probe loop without a
-container restart.
+IP changes made through the Setup Wizard take effect **immediately** — no
+container restart required.
+
+---
+
+## Channel Settings
+
+Click any channel name strip to open the full channel settings panel. The
+mixer strips slide away and a Wing-style editor takes over the center area.
+All changes are sent to the Wing via OSC as you make them — there is no
+Save button.
+
+### Left nav rail
+
+Nine sections with mini-thumbnail canvas previews:
+
+| Section | What it shows |
+|---|---|
+| **Home** | Tabs: Overview · Icon/Color · Name · Tags |
+| **Gain** | Channel Input (gain, +48V, Pad, Invert) · Trim & Balance · Filter |
+| **Gate** | ON/OFF · Transfer curve · Threshold / Range / Attack / Release |
+| **EQ** | ON/OFF · Frequency graph · Band tabs with per-band Gain / Freq / Q |
+| **Dynamics** | ON/OFF · Transfer curve · Envelope (Attack / Hold / Release) |
+| **Insert 1 / 2** | FX processor ON/OFF and type display |
+| **Main Sends** | Four vertical faders · Pan bar visualiser |
+| **Bus Sends** | 16 vertical strips with TAP / ON / PAN LNK per bus |
+
+### EQ — per-band detail
+
+Band tabs across the top (Low Shelf, PEQ 1–4, High Shelf), colour-coded
+green for boost and red for cut. Each band shows:
+
+- **Low Shelf**: Lo-Cut enable/disable · Gain L · Frequency L
+- **PEQ 1–4**: Gain · Frequency (log scale 20 Hz–20 kHz) · Q
+- **High Shelf**: Hi-Cut enable/disable · Gain H · Frequency H
+
+The EQ graph redraws on every slider movement.
+
+### Dynamics — dual graph
+
+**Left**: compressor transfer curve (threshold, ratio, knee).
+**Right**: envelope graph — attack sets the left rising slope, hold sets
+the flat top width, release sets the right falling slope. Control-point
+circles sit at each vertex.
+
+### Bus Sends — vertical strips
+
+16 vertical strips (scroll horizontally), each showing:
+- **TAP** — PRE (amber) or POST (blue)
+- Fixed-width dB level display
+- Vertical fader
+- ON/OFF
+- **PAN LNK** — link send pan to channel pan
 
 ---
 
 ## Wing OSC Protocol (V3.1.0)
-
-This app implements the official Wing OSC protocol. Key differences from X32/M32:
 
 | | X32 (wrong) | Wing (correct) |
 |---|---|---|
@@ -79,32 +127,23 @@ This app implements the official Wing OSC protocol. Key differences from X32/M32
 | Mute value | 1=muted | **0=unmuted, 1=muted** |
 | Master fader | /lr/mix/fader | /main/1/fdr |
 | Solo | /ch/1/solo | /ch/1/$solo |
-| Subscription | /xinfo | /*S every 8 s |
+| Subscription | /xinfo | `/*S` every 8 s |
 
-### Probe
-```
-Send:  /?
-Reply: /? ,s "WING,192.168.1.x,PGM,ngc-full,NO_SERIAL,3.1.0"
-```
+### Fader value encoding
 
-### Get / Set
-```
-Get:     /ch/1/fdr            (no args)
-Reply:   /ch/1/fdr ,sff  "label"  0.75  3.0   (ascii, raw 0-1, dB)
+Wing encodes fader values differently depending on context:
 
-Set float:  /ch/1/fdr  ,f  0.75
-Set int:    /ch/1/mute ,i  1
-Toggle:     /ch/1/mute ,i  -1    (Wing flips 0-1 internally)
+- **GET reply** (`,sff`): `args = (label_str, raw_0_to_1, dB_value)` — use `args[1]`
+- **`/*S` push** (`,f`): `args = (dB_value,)` — convert with piecewise formula:
+
+```
+dB < -3   → raw = 0.675 × (1 + (dB + 3) / 57)
+-3…+4 dB  → raw = 0.75 + dB × 0.025
++4…+10 dB → raw = 0.85 + (dB − 4) × (0.9233 − 0.85) / 6
 ```
 
-### Subscription
-```
-Send:  /*S   (every 8 seconds — Wing times out after 10 s)
-Wing pushes single-value events:
-  /ch/1/fdr  ,f  0.75
-  /ch/1/mute ,i  1
-Only ONE subscription active on the Wing at a time.
-```
+Verified data points from V3.1.0 docs:
+`0.675@-3dB · 0.750@0dB · 0.850@+4dB · 0.923@+10dB`
 
 ### OSC Command Reference
 
@@ -112,7 +151,7 @@ Only ONE subscription active on the Wing at a time.
 
 | Path | Type | Range | Description |
 |---|---|---|---|
-| /ch/{n}/fdr | F | -144..10 dB | Fader level (raw 0–1) |
+| /ch/{n}/fdr | F | -144..10 dB | Fader (raw 0–1 on wire) |
 | /ch/{n}/mute | I | 0..1 | Mute (0=on, 1=muted) |
 | /ch/{n}/pan | F | -100..100 | Pan |
 | /ch/{n}/$solo | I | 0..1 | Solo |
@@ -123,8 +162,9 @@ Only ONE subscription active on the Wing at a time.
 | /ch/{n}/dyn/on | I | 0..1 | Compressor enable |
 | /ch/{n}/dyn/thr | F | -60..0 dB | Compressor threshold |
 | /ch/{n}/dyn/ratio | S | 1.1..100 | Compressor ratio |
-| /ch/{n}/dyn/att | F | 0..120 ms | Compressor attack |
-| /ch/{n}/dyn/rel | F | 4..4000 ms | Compressor release |
+| /ch/{n}/dyn/att | F | 0..200 ms | Attack |
+| /ch/{n}/dyn/hld | F | 0..2000 ms | Hold |
+| /ch/{n}/dyn/rel | F | 4..3000 ms | Release |
 | /ch/{n}/gate/on | I | 0..1 | Gate enable |
 | /ch/{n}/gate/thr | F | -80..0 dB | Gate threshold |
 | /ch/{n}/gate/range | F | 3..60 dB | Gate range |
@@ -149,60 +189,39 @@ Only ONE subscription active on the Wing at a time.
 | /dca/{n}/mute | I | DCA mute |
 | /mgrp/{n}/mute | I | Mute group |
 
-**Special**
-
-| Path | Description |
-|---|---|
-| /? | Console info query |
-| /*S | Subscribe to push events |
-| /$stat/solo | Global solo active [RO] |
-
 ---
 
 ## Hardware VU Meters
 
-Meter data uses the Wing **native binary TCP protocol** (port 2222, Channel 3),
-not OSC. The app:
+Meter data uses the Wing **native binary TCP protocol** (port 2222, Channel 3):
 
-1. Opens a TCP connection to Wing port 2222
-2. Sends a meter subscription packet requesting all strip types
-3. Listens on UDP port 2225 for Wing to push meter packets (~50 ms cadence)
-4. Parses 8 signed int16 words per strip (in/out L/R, gate key/gain, dyn key/gain)
-5. Converts to 0.0–1.0 display range and broadcasts to browsers
-6. Renews the subscription every 4 seconds
+1. Opens TCP connection to Wing port 2222
+2. Sends meter subscription packet for all strip types
+3. Listens on UDP port 2225 for Wing meter pushes (~50 ms cadence)
+4. Parses 8 × int16 words per strip (in/out L/R, gate key/gain, dyn key/gain)
+5. Converts to 0.0–1.0 and broadcasts to browsers via WebSocket
+6. Renews subscription every 4 seconds
 
-Each strip shows:
-- **Left/right VU bars** from output_L / output_R (post-fader)
-- **G indicator** lit green when gate_key > 0
-- **D indicator** lit blue when dyn_key > 0
-
-When the Wing is unreachable the UI shows an animated placeholder.
+Each strip shows left/right VU bars (post-fader output), **G** indicator
+(gate active), and **D** indicator (dynamics active).
 
 ---
 
 ## Audio Recording
 
 Wing USB audio registers as an ALSA device. The container uses `privileged: true`
-and an `entrypoint.sh` that detects `/dev/snd` at startup automatically — no
-manual docker-compose.yml edits required.
+and an `entrypoint.sh` that detects `/dev/snd` at startup automatically.
 
 ```bash
 # Connect Wing USB cable, then:
 docker compose restart wing-remote
-# entrypoint.sh will detect /dev/snd and configure audio group access
 ```
 
 Recordings are saved as timestamped WAV files in the Docker-managed
-`recordings` volume:
+`recordings` volume. Configuration in `.env`:
 
-```
-/var/lib/docker/volumes/wing-remote_recordings/_data/
-session_20260326_143022.wav   # 32ch, 48kHz, 32-bit float
-```
-
-Configuration in `.env`:
 ```ini
-SAMPLE_RATE=48000      # 48000 or 96000
+SAMPLE_RATE=48000      # 44100, 48000, or 96000
 BIT_DEPTH=32           # 16, 24, or 32 (float)
 RECORD_CHANNELS=32     # 1–32
 ```
@@ -222,7 +241,7 @@ RECORD_CHANNELS=32     # 1–32
 | GET | /api/audio-devices | List available audio devices |
 | GET | /api/setup/detect | Environment detection |
 | POST | /api/setup/test-osc | Test Wing OSC connectivity |
-| POST | /api/setup/apply | Apply configuration (live, no restart needed) |
+| POST | /api/setup/apply | Apply configuration (live) |
 | POST | /api/setup/restart | Restart container via Docker socket |
 
 ---
@@ -231,34 +250,30 @@ RECORD_CHANNELS=32     # 1–32
 
 Connect to `ws://localhost:8000/ws`
 
-### Browser to Server
+### Browser → Server
 
 ```json
-{ "type": "fader",       "strip": "ch",  "ch": 1, "value": 0.75 }
-{ "type": "mute",        "strip": "ch",  "ch": 1, "value": true  }
-{ "type": "mute_toggle", "strip": "ch",  "ch": 1 }
-{ "type": "pan",         "strip": "bus", "ch": 3, "value": -0.5  }
-{ "type": "osc",         "path": "/ch/1/eq/on",   "value": 1 }
-{ "type": "record_start","channels": [1,2,3,4] }
+{ "type": "fader",        "strip": "ch",  "ch": 1, "value": 0.75 }
+{ "type": "mute_toggle",  "strip": "ch",  "ch": 1 }
+{ "type": "pan",          "strip": "bus", "ch": 3, "value": -0.5  }
+{ "type": "osc",          "path": "/ch/1/eq/on", "value": 1 }
+{ "type": "record_start", "channels": [1,2,3,4] }
 { "type": "record_stop" }
 ```
 
-Strip types: "ch" "aux" "bus" "main" "mtx" "dca" "mgrp"
+Strip types: `ch` `aux` `bus` `main` `mtx` `dca` `mgrp`
 
-### Server to Browser
+### Server → Browser
 
 ```json
-{ "type": "snapshot",    "mixer": { "channels": {}, "buses": {}, ... } }
-{ "type": "wing_status", "connected": true, "wing_ip": "192.168.1.x" }
-{ "type": "fader",       "strip": "ch", "ch": "1", "value": 0.75 }
-{ "type": "mute",        "strip": "ch", "ch": "1", "value": true  }
-{ "type": "name",        "strip": "ch", "ch": "1", "value": "KICK" }
-{ "type": "eq_band",     "strip": "ch", "ch": "1", "band": 2, "attr": "g", "value": 3.0 }
-{ "type": "dyn",         "strip": "ch", "ch": "1", "dyn": { "on": true, "thr": -18 } }
-{ "type": "gate",        "strip": "ch", "ch": "1", "gate": { "on": true, "thr": -40 } }
-{ "type": "send",        "strip": "ch", "ch": "1", "bus": "3", "send": { "on": true, "lvl": 0.6 } }
-{ "type": "meters",      "levels": { "ch-1": 0.72, "ch-1-gate": 1, "bus-1": 0.45 } }
-{ "type": "record_status","status": "recording", "file": "session_20260326_143022.wav" }
+{ "type": "snapshot",     "mixer": { "channels": {}, "buses": {}, ... } }
+{ "type": "wing_status",  "connected": true, "wing_ip": "192.168.1.x" }
+{ "type": "fader",        "strip": "ch", "ch": "1", "value": 0.75 }
+{ "type": "mute",         "strip": "ch", "ch": "1", "value": true  }
+{ "type": "name",         "strip": "ch", "ch": "1", "value": "KICK" }
+{ "type": "eq_band",      "strip": "ch", "ch": "1", "band": 2, "attr": "g", "value": 3.0 }
+{ "type": "meters",       "levels": { "ch-1": 0.72, "ch-1-gate": 1 } }
+{ "type": "record_status","status": "recording", "file": "session_....wav" }
 ```
 
 ---
@@ -268,16 +283,31 @@ Strip types: "ch" "aux" "bus" "main" "mtx" "dca" "mgrp"
 ```
 wing-remote/
 ├── backend/
-│   ├── main.py          # FastAPI, OSC bridge, binary meter engine, recording
-│   ├── setup.py         # Setup wizard: env detection, OSC probe, config apply
+│   ├── main.py              FastAPI, OSC bridge, binary meter engine, recording
+│   ├── setup.py             Setup wizard: env detection, OSC probe, config apply
 │   └── requirements.txt
 ├── frontend/
 │   └── static/
-│       └── index.html   # Single-page app: UI, Setup Wizard, light/dark theme
-├── entrypoint.sh        # Runtime audio device detection
-├── Dockerfile           # Multi-stage build
+│       ├── index.html       HTML structure (728 lines)
+│       ├── css/
+│       │   ├── main.css     Mixer UI, strips, meters, panels, channel settings
+│       │   └── wizard.css   Setup wizard overlay
+│       └── js/
+│           ├── state.js     Shared state, LAYERS config, constants
+│           ├── strips.js    Mixer model init, layer nav, strip rendering
+│           ├── meters.js    Meter animation, EQ canvas helpers
+│           ├── faders.js    Fader/knob drag, touch, mute/solo/rec
+│           ├── detail.js    Channel selection, detail panel
+│           ├── recording.js Recording transport, waveform, param updaters
+│           ├── views.js     View switching, all view builders, theme toggle
+│           ├── osc.js       WebSocket, OSC, Wing status, message handler, init
+│           ├── wizard.js    Setup wizard
+│           └── ch-settings.js  Channel settings panel (all 9 sections)
+├── entrypoint.sh            Runtime audio device detection
+├── Dockerfile               Multi-stage build (static Docker CLI binary)
 ├── docker-compose.yml
 ├── .env.example
+├── .npmrc                   Suppresses spurious npm warnings during build
 ├── CHANGELOG.md
 └── README.md
 ```
@@ -288,89 +318,30 @@ wing-remote/
 
 **"Wing did not respond to OSC"**
 → SETUP → Network on Wing → enable OSC Remote Control
-→ Wing OSC port is always 2223 — confirm in .env
+→ Wing OSC port is always 2223 — confirm in `.env`
 → Firewall: `sudo ufw allow 2223/udp && sudo ufw allow 2224/udp`
 
-**Status shows "Wing Unreachable" after page refresh**
-→ v2.0 polls /api/status immediately on load — should resolve within 500 ms
-→ If persisting: `docker compose logs wing-remote` for probe errors
-
 **Faders don't sync from physical Wing**
-→ Check logs for "Subscription keepalive /*S sent" every 8 seconds
-→ Only one OSC subscription active — Wing Edit app may compete for it
+→ Both send and receive use the same UDP socket on `LOCAL_OSC_PORT` (2224)
+→ Confirm `LOCAL_OSC_PORT=2224` in `.env` and that port 2224/udp is open
+→ Only one `/*S` subscription active — Wing Remote app may compete with
+  a connected Wing Remote iOS/Android app or Wing Edit
 
 **VU meters not showing**
 → Meter data uses TCP port 2222: `sudo ufw allow 2222/tcp`
-→ Check logs for "Meter subscription sent" and "Meter TCP connected"
+→ Check logs: `docker compose logs wing-remote | grep -i meter`
 
 **No audio recording**
 → Connect Wing USB, then `docker compose restart wing-remote`
-→ Check logs for "[entrypoint] /dev/snd detected"
-→ WSL1 and macOS Docker Desktop do not expose USB audio
+→ Check logs for `[entrypoint] /dev/snd detected`
+→ WSL1 and macOS Docker Desktop do not expose USB audio devices
 
 **Port 8000 in use**
-→ Change the port mapping in docker-compose.yml under ports:
+→ Edit `docker-compose.yml` — under `ports:` change `8000:8000` to `8080:8000`
+  (or any free port)
 
 ---
 
 ## License
 
 MIT
-
----
-
-## Channel Settings Panel
-
-Click any channel name strip to open the full channel settings view. The mixer strips
-slide away and a Wing-style editor takes over the center area.
-
-### Navigation (left rail)
-
-Nine sections with mini-thumbnail previews:
-
-| Section | Thumbnail preview |
-|---|---|
-| Home | Color bar + name |
-| Gain | Yellow gain bar height |
-| Gate | Transfer curve (blue when ON) |
-| EQ | Frequency response curve |
-| Dynamics | Compressor curve (orange when ON) |
-| Insert 1 / 2 | FX slot color + type name |
-| Main Sends | Pan puck position |
-| Bus Sends | 16 send level bars |
-
-### EQ — per-band detail
-
-- **Band tabs**: Low Shelf, PEQ 1–4, High Shelf — each tab colour-coded by gain amount
-- **Low Shelf**: Lo-Cut filter on/off + Gain L + Frequency L (log-scale)
-- **PEQ 1–4**: Gain, Frequency (log), and Q per band — all with live value labels
-- **High Shelf**: Hi-Cut filter on/off + Gain H + Frequency H (log-scale)
-- Main EQ graph redraws on every slider movement
-
-### Dynamics — dual graph view
-
-Left panel: compressor transfer curve (threshold, ratio, knee).
-Right panel: envelope graph showing the attack (left slope), hold (flat top),
-and release (right slope) as a trapezoid shape with draggable control points.
-All six parameters send OSC to the Wing immediately.
-
-### Bus Sends — vertical strip layout
-
-16 vertical channel strips, each showing:
-- Bus name
-- **TAP** toggle — PRE (amber) or POST (blue); toggles the send tap point
-- Fixed-width dB level display (no layout shift at any dB value)
-- Vertical fader
-- ON/OFF button
-- **PAN LNK** toggle — links send pan to channel pan
-
-### Main Sends & Panning
-
-Four vertical faders (M1–M4) with fixed-width dB labels plus a horizontal
-pan bar visualiser — a track with a blue puck that moves between L and R
-as the pan value changes.
-
-### Automatic save
-
-All parameter changes are sent to the Wing via OSC as you make them.
-There is no Save button — changes are live.
