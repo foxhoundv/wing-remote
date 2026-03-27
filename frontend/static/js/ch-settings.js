@@ -1,4 +1,4 @@
-// Wing Remote v2.2.1 — Channel Settings Panel (Option C: Card Rail + Dashboard)
+// Wing Remote v2.2.2 — Channel Settings Panel (Option C: Card Rail + Dashboard)
 // ═══════════════════════════════════════════════════════════════════════════
 // CHANNEL SETTINGS PANEL
 // ═══════════════════════════════════════════════════════════════════════════
@@ -27,6 +27,24 @@ const CS_SECTIONS = [
   { id:'mainsends',  label:'MAIN SENDS',  badge:null    },
   { id:'bussends',   label:'BUS SENDS',   badge:null    },
 ];
+
+// Sections available per strip type.
+// Channels have all sections. Aux has dyn (PSE/LA combo) but only one insert (preins).
+// Buses, mains, matrix have no gate, no inserts, no input options.
+// DCAs have only fader/mute — just home section.
+const CS_SECTION_MAP = {
+  ch:   ['home','gain','gate','eq','dynamics','insert1','insert2','mainsends','bussends'],
+  aux:  ['home','gain','gate','eq','dynamics','insert1',           'mainsends','bussends'],
+  bus:  ['home',             'eq','dynamics',                      'mainsends'          ],
+  main: ['home',             'eq','dynamics',                      'mainsends'          ],
+  mtx:  ['home',             'eq','dynamics',                      'mainsends'          ],
+  dca:  ['home'                                                                         ],
+};
+
+function _csSectionsForType() {
+  const allowed = CS_SECTION_MAP[_csStripType] || CS_SECTION_MAP.ch;
+  return CS_SECTIONS.filter(s => allowed.includes(s.id));
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function _csGetStrip() {
@@ -87,7 +105,7 @@ function _csRenderNavRail() {
   if (!rail) return;
   const ch = _csGetStrip() || {};
 
-  rail.innerHTML = CS_SECTIONS.map(sec => {
+  rail.innerHTML = _csSectionsForType().map(sec => {
     const isActive = sec.id === _csSection;
     let badgeHtml  = '';
     if (sec.badge === 'on') {
@@ -118,7 +136,10 @@ function _csDrawNavThumbs() {
     insert1:   c => _csThumbInsert(c, ch.ins1),
     insert2:   c => _csThumbInsert(c, ch.ins2),
   };
+  // Only draw thumbs for sections actually present in the current nav rail
+  const allowed = new Set((_csSectionsForType()).map(s => s.id));
   Object.entries(thumbs).forEach(([id, fn]) => {
+    if (!allowed.has(id)) return;
     const c = document.getElementById(`nav-thumb-${id}`);
     if (c) fn(c);
   });

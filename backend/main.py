@@ -1,5 +1,5 @@
 """
-WING Remote v2.2.1 - FastAPI Backend
+WING Remote v2.2.2 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 

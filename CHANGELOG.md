@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.2] — 2026-03-27
+
+### Fixed
+
+- **Auxiliary channel nav rail** — opening Channel Settings on an AUX strip was
+  showing the Dynamics and Insert 2 rail cards, which do not exist on auxiliary
+  channels per the Wing V3.1.0 protocol spec.
+
+  - **Dynamics**: AUX channels have `/aux/n/dyn` (PSE/LA combo compressor) so
+    the Dynamics section is correctly retained.
+  - **Insert 2**: AUX channels have `/aux/n/preins` (one insert slot, equivalent
+    to Insert 1) but no `/aux/n/postins` (post-insert), so Insert 2 is now
+    hidden for AUX strips.
+
+### Changed
+
+- **`CS_SECTION_MAP`** — new per-strip-type section allowlist controls which nav
+  rail cards are shown when Channel Settings opens. Sections are filtered for
+  each strip type based on what the Wing hardware actually supports:
+
+  | Strip type | Sections |
+  |---|---|
+  | CH 1–40 | Home · Input · Gate · EQ · Dynamics · Insert 1 · Insert 2 · Main Sends · Bus Sends |
+  | AUX 1–8 | Home · Input · Gate · EQ · Dynamics · Insert 1 · Main Sends · Bus Sends |
+  | BUS / MAIN / MTX | Home · EQ · Dynamics · Main Sends |
+  | DCA 1–16 | Home only |
+
+- **`_csSectionsForType()`** — returns the filtered section list for the current
+  strip type; used by both `_csRenderNavRail` and `_csDrawNavThumbs` so thumbnail
+  canvases are only drawn for sections actually present in the DOM.
+
+---
+
 ## [2.2.1] — 2026-03-27
 
 ### Fixed

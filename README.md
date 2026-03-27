@@ -1,4 +1,4 @@
-# WING Remote v2.2.1
+# WING Remote v2.2.2
 
 A self-hosted web application for remotely controlling a **Behringer Wing** digital
 mixer and recording multitrack audio — all from your browser, running in Docker.
