@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wing Remote</title>
-  <link rel="stylesheet" href="css/main.css">
-  <link rel="stylesheet" href="css/wizard.css">
+  <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="stylesheet" href="/static/css/wizard.css">
 </head>
 <body>
 
@@ -25,19 +25,34 @@
     <button class="nav-btn nav-btn-setup" id="nav-setup" onclick="openWizard()" title="Wing Remote settings only — does not affect the Behringer Wing console">Setup ⚙</button>
   </div>
   <div class="topbar-status">
-    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle light / dark mode"><svg id="iconMoon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-</svg><svg id="iconSun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-  <circle cx="12" cy="12" r="5"/>
-  <line x1="12" y1="1"  x2="12" y2="3"/>
-  <line x1="12" y1="21" x2="12" y2="23"/>
-  <line x1="4.22" y1="4.22"  x2="5.64" y2="5.64"/>
-  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-  <line x1="1"  y1="12" x2="3"  y2="12"/>
-  <line x1="21" y1="12" x2="23" y2="12"/>
-  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-</svg></button>
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Dark  →  Switch to Mid Grey">
+  <svg xmlns="http://www.w3.org/2000/svg" width="44" height="16" viewBox="0 0 44 16"
+    fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Half-sun segment (left, lights up in Light mode) -->
+    <g id="iconSegSun" opacity="0.35">
+      <!-- Sun: left semicircle + rays on left side only -->
+      <path d="M 9 8 m -4 0 a 4 4 0 0 1 4 -4" stroke-width="1.5"/>
+      <path d="M 9 8 m -4 0 a 4 4 0 0 0 4  4" stroke-width="1.5"/>
+      <line x1="9" y1="1"   x2="9" y2="2.5" stroke-width="1.5"/>
+      <line x1="9" y1="13.5" x2="9" y2="15" stroke-width="1.5"/>
+      <line x1="2" y1="8"   x2="3.5" y2="8" stroke-width="1.5"/>
+      <line x1="3.8" y1="3.8" x2="4.9" y2="4.9" stroke-width="1.5"/>
+      <line x1="3.8" y1="12.2" x2="4.9" y2="11.1" stroke-width="1.5"/>
+    </g>
+    <!-- Slash separator (center, always visible at mid opacity) -->
+    <g id="iconSegMid" opacity="0.35">
+      <!-- Two horizontal lines with a circle — represents "mid" grey -->
+      <circle cx="22" cy="8" r="3" stroke-width="1.5"/>
+      <line x1="19" y1="8" x2="16" y2="8" stroke-width="1.5"/>
+      <line x1="25" y1="8" x2="28" y2="8" stroke-width="1.5"/>
+    </g>
+    <!-- Half-crescent segment (right, lights up in Dark mode) -->
+    <g id="iconSegMoon" opacity="1">
+      <!-- Crescent: right half arc (convex) minus inner offset arc -->
+      <path d="M 35 4 a 5.5 5.5 0 0 1 0 8 a 3.5 3.5 0 0 0 0 -8" stroke-width="1.5" fill="none"/>
+    </g>
+  </svg>
+</button>
     <div class="status-pill" id="oscStatus">
       <div class="status-dot offline" id="oscDot"></div>
       <span id="oscLabel">OSC Disconnected</span>
@@ -713,16 +728,16 @@
 </div>
 
 <!-- JavaScript modules — load order matters: state first, osc/init last -->
-<script src="js/state.js"></script>
-<script src="js/strips.js"></script>
-<script src="js/meters.js"></script>
-<script src="js/faders.js"></script>
-<script src="js/detail.js"></script>
-<script src="js/recording.js"></script>
-<script src="js/views.js"></script>
-<script src="js/osc.js"></script>
-<script src="js/wizard.js"></script>
-<script src="js/ch-settings.js"></script>
+<script src="/static/js/state.js"></script>
+<script src="/static/js/strips.js"></script>
+<script src="/static/js/meters.js"></script>
+<script src="/static/js/faders.js"></script>
+<script src="/static/js/detail.js"></script>
+<script src="/static/js/recording.js"></script>
+<script src="/static/js/views.js"></script>
+<script src="/static/js/osc.js"></script>
+<script src="/static/js/wizard.js"></script>
+<script src="/static/js/ch-settings.js"></script>
 
 </body>
 </html>

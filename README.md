@@ -1,4 +1,4 @@
-# WING Remote v2.1
+# WING Remote v2.2.1
 
 A self-hosted web application for remotely controlling a **Behringer Wing** digital
 mixer and recording multitrack audio — all from your browser, running in Docker.
@@ -14,10 +14,10 @@ mixer and recording multitrack audio — all from your browser, running in Docke
 |---|---|---|
 | 🎚 | **Full Mixer Control** | All 40 channels, 8 aux, 16 buses, 4 mains, 8 matrix, 16 DCA |
 | 📊 | **Real Hardware VU Meters** | Live levels via Wing binary TCP protocol (port 2222, Channel 3) |
-| 🎛 | **Channel Settings** | Full per-channel editor: EQ, Dynamics, Gate, Gain, Inserts, Bus/Main Sends |
+| 🎛 | **Channel Settings** | Full per-channel editor: EQ, Dynamics, Gate, Input, Inserts, Bus/Main Sends |
 | 🔄 | **Bidirectional Sync** | Wing→browser push via `/*S` subscription; bulk query on connect |
 | 💡 | **Gate / Dyn LEDs** | Per-strip G and D indicators lit from hardware meter gate_key / dyn_key |
-| 🌙 | **Dark & Light Mode** | Toggle with Material Design SVG icons; preference persisted |
+| 🎨 | **Three-Theme Mode** | Dark · Mid Grey · Light — composite icon cycles through all three; preference persisted |
 | ⚙ | **Setup Wizard** | In-app OSC test, audio detection, live IP change — no restart required |
 | 🎙 | **Multitrack Recording** | Up to 32 channels @ 44.1 / 48 / 96 kHz WAV via USB audio |
 | 🐳 | **Docker** | Single `docker compose up --build` deployment |
@@ -42,6 +42,23 @@ open http://localhost:8000
 The **Setup Wizard** launches automatically on first load. It walks through
 network config, tests the OSC connection to your Wing, and configures audio
 passthrough — all without leaving the browser.
+
+---
+
+## Themes
+
+Click the theme button in the top-right status bar to cycle through the three
+available themes. The button shows a composite icon with three segments:
+
+| Segment | Symbol | Theme |
+|---|---|---|
+| Left | ☀ Half-sun with rays | **Light** — warm off-white, for bright environments |
+| Center | ⬤ Circle with lines | **Mid Grey** — desaturated charcoal, balanced for any environment |
+| Right | ☽ Half-crescent | **Dark** (default) — near-black, ideal for low-light use |
+
+The active segment is fully opaque; the other two dim to 35%. Your preference
+is saved to `localStorage` and restored before the first paint to prevent any
+theme flash on reload.
 
 ---
 
@@ -80,7 +97,7 @@ Nine sections with mini-thumbnail canvas previews:
 | Section | What it shows |
 |---|---|
 | **Home** | Tabs: Overview · Icon/Color · Name · Tags |
-| **Gain** | Channel Input (gain, +48V, Pad, Invert) · Trim & Balance · Filter |
+| **Input** | Six pill indicators: 48V · LC · INV · HC · TILT · DLY — lit when active |
 | **Gate** | ON/OFF · Transfer curve · Threshold / Range / Attack / Release |
 | **EQ** | ON/OFF · Frequency graph · Band tabs with per-band Gain / Freq / Q |
 | **Dynamics** | ON/OFF · Transfer curve · Envelope (Attack / Hold / Release) |
@@ -308,6 +325,8 @@ wing-remote/
 ├── docker-compose.yml
 ├── .env.example
 ├── .npmrc                   Suppresses spurious npm warnings during build
+├── CHANGELOG.md
+└── README.md
 ├── CHANGELOG.md
 └── README.md
 ```

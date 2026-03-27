@@ -397,6 +397,8 @@ setTimeout(() => {
   drawDynGraph(-18, 4);
   // Set home as the active view explicitly
   setView('home');
+  // Apply theme icon to match the restored localStorage theme
+  if (typeof initThemeIcon === 'function') initThemeIcon();
   // Auto-launch setup wizard on first load (if Wing IP is still default)
   checkAndLaunchWizard();
 }, 100);

@@ -5,6 +5,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.1] — 2026-03-27
+
+### Fixed
+
+- **Input Settings Rail Thumb** — the nav rail card for the Gain / Input section was
+  showing a plain yellow gain-bar thumbnail that did not reflect the new input_options
+  pill layout. Replaced with a 3×2 grid of six labelled pill boxes drawn on the 80×40
+  canvas, one for each input option: **48V**, **LC**, **INV**, **HC**, **TILT**, **DLY**.
+  Each pill reads live channel state and renders lit (coloured background + border) when
+  enabled or dim (near-transparent) when disabled — matching the accent colours used in
+  the content area (amber / blue / red / cyan / green / orange respectively). The thumbnail
+  updates every time the nav rail redraws, so toggling any option in the content area is
+  immediately reflected in the rail card.
+
+### Changed
+
+- **Rail card label** — the Gain section rail card label changed from **GAIN** to **INPUT**
+  to match the section's actual function (input signal path options) and the backend
+  rename to *Input Settings Rail Thumb*.
+- **Rail card badge** — the gain dB value badge that previously appeared below the GAIN
+  label has been removed. The six pill states in the thumbnail now communicate input
+  status at a glance without needing a separate badge.
+
+---
+
+## [2.2.0] — 2026-03-27
+
+### Added
+
+#### Medium Grey Theme
+- Added a third UI theme — **Mid Grey** — sitting comfortably between the
+  existing dark and light modes. Background layers use desaturated charcoal
+  greys (`#2a2c31` through `#42454d`), borders are medium-dark, and text is
+  slightly softer than full dark mode. All accent colours (orange, green,
+  cyan, red, amber, blue) are inherited unchanged from dark mode so the
+  UI chrome retains full contrast and vibrancy against the grey surface.
+
+#### Three-State Theme Cycle Button
+- Replaced the two-icon dark/light toggle with a **composite SVG pill** showing
+  three segments side by side, each representing one theme:
+  - **☀ Half-sun** (left) — rays and a left semicircle arc; full opacity in Light mode
+  - **⬤ Circle + lines** (center) — neutral mid-point symbol; full opacity in Mid Grey mode
+  - **☽ Half-crescent** (right) — right-facing moon arc; full opacity in Dark mode
+- Inactive segments dim to 35% opacity; the active segment is always visually
+  distinct. All transitions animate at `0.2s` via CSS.
+- Clicking the button cycles **Dark → Mid Grey → Light → Dark** in order.
+- `localStorage` key `wing-theme` now stores `'dark'`, `'mid'`, or `'light'`.
+  The saved value is restored before the first paint to prevent a theme flash
+  on page reload.
+- Button tooltip text cycles with the active theme to indicate the next state:
+  e.g. *"Dark → Switch to Mid Grey"*.
+
+#### Static Asset Paths Fixed
+- The JS/CSS modular refactor in v2.1 introduced relative asset paths
+  (`css/main.css`, `js/state.js`) that resolved to the wrong URL against
+  FastAPI's `/static/` mount point. All `<link>` and `<script>` references
+  updated to absolute paths (`/static/css/main.css`, `/static/js/state.js`)
+  so the browser correctly fetches all stylesheets and scripts.
+
+---
+
 ## [2.1.0] — 2026-03-26
 
 ### Added

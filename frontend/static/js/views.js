@@ -1,4 +1,4 @@
-// Wing Remote v2.1 — Views, View Builders, Theme Toggle
+// Wing Remote v2.2.1 — Views, View Builders, Theme Toggle
 // ── VIEW SWITCHER ───────────────────────────────────
 function setView(v) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -308,7 +308,7 @@ async function _loadUtilityStatus() {
     if (sysEl) {
       sysEl.innerHTML = `
         <div style="color:var(--text-muted);font-size:10px;font-weight:700">VERSION</div>
-        <div style="color:var(--text-primary);font-family:monospace;font-size:11px;">2.0.1</div>
+        <div style="color:var(--text-primary);font-family:monospace;font-size:11px;">2.2.1</div>
         <div style="color:var(--text-muted);font-size:10px;font-weight:700">RECORDING</div>
         <div style="color:var(--text-primary);font-family:monospace;font-size:11px;">${data.recording?'● ACTIVE':'IDLE'}</div>`;
     }
@@ -337,26 +337,55 @@ function renderMetersView() {
   state._metersViewActive = true;
 }
 
-// ── THEME TOGGLE ──────────────────────────────────────
+// ── THEME TOGGLE — cycles: dark → mid → light → dark ──────────────────────────
+// Themes: 'dark' (default), 'mid' (medium grey), 'light'
+const THEMES = ['dark', 'mid', 'light'];
+
+function _currentTheme() {
+  const root = document.documentElement;
+  if (root.classList.contains('light')) return 'light';
+  if (root.classList.contains('mid'))   return 'mid';
+  return 'dark';
+}
+
 function toggleTheme() {
-  const isLight = document.documentElement.classList.toggle('light');
-  _applyThemeIcon(isLight);
-  try { localStorage.setItem('wing-theme', isLight ? 'light' : 'dark'); } catch(e) {}
+  const cur   = _currentTheme();
+  const next  = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+  const root  = document.documentElement;
+  root.classList.remove('dark', 'mid', 'light');
+  if (next !== 'dark') root.classList.add(next);
+  _applyThemeIcon(next);
+  try { localStorage.setItem('wing-theme', next); } catch(e) {}
 }
 
-function _applyThemeIcon(isLight) {
-  const moon = document.getElementById('iconMoon');
-  const sun  = document.getElementById('iconSun');
-  if (moon) moon.style.display = isLight ? 'none'  : 'block';
-  if (sun)  sun.style.display  = isLight ? 'block' : 'none';
+function _applyThemeIcon(theme) {
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  // Tooltip cycles with the theme
+  const labels = { dark: 'Dark  →  Switch to Mid Grey', mid: 'Mid Grey  →  Switch to Light', light: 'Light  →  Switch to Dark' };
+  btn.title = labels[theme] || 'Toggle theme';
+  // Highlight the active segment
+  const segSun  = document.getElementById('iconSegSun');
+  const segMid  = document.getElementById('iconSegMid');
+  const segMoon = document.getElementById('iconSegMoon');
+  if (segSun)  segSun.style.opacity  = theme === 'light' ? '1' : '0.35';
+  if (segMid)  segMid.style.opacity  = theme === 'mid'   ? '1' : '0.35';
+  if (segMoon) segMoon.style.opacity = theme === 'dark'  ? '1' : '0.35';
 }
 
-// Apply saved theme on load (before first paint — class only, icon fixed after DOM)
+// Apply saved theme on load (before first paint)
 (function() {
   try {
-    if (localStorage.getItem('wing-theme') === 'light') {
-      document.documentElement.classList.add('light');
-    }
+    const saved = localStorage.getItem('wing-theme');
+    const root  = document.documentElement;
+    if (saved === 'light') root.classList.add('light');
+    else if (saved === 'mid') root.classList.add('mid');
+    // dark is the default — no class needed
   } catch(e) {}
 })();
+
+// Apply icon state after DOM ready (called from init)
+function initThemeIcon() {
+  _applyThemeIcon(_currentTheme());
+}
 // selectLayer is now defined above in the mixer model section
