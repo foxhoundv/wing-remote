@@ -89,8 +89,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pythonosc.dispatcher import Dispatcher
-from pythonosc.osc_server import AsyncIOOSCUDPServer
-from pythonosc.udp_client import SimpleUDPClient
+import socket as _socket
+from pythonosc.udp_client import SimpleUDPClient   # kept for type compat only
+from pythonosc.dispatcher import Dispatcher
 
 from backend.setup import (
     detect_environment,
@@ -144,6 +145,90 @@ WING_SUBSCRIBE = "/*S"
 
 
 # ── Shared State ──────────────────────────────────────────────────────────────
+class WingOSCTransport:
+    """
+    Single UDP socket that both SENDS to and RECEIVES from the Wing.
+
+    Why one socket matters: Wing replies to the source port of every UDP
+    packet it receives. By using one socket bound to LOCAL_OSC_PORT (2224)
+    for all outgoing messages, Wing sends GET replies AND subscription push
+    events back to 2224 — the same socket we read from.
+
+    Using two separate sockets (SimpleUDPClient for send, AsyncIOOSCUDPServer
+    for receive) means sends go from an ephemeral port, so Wing replies to
+    that ephemeral port — and our receive socket on 2224 never sees them.
+    """
+    def __init__(self, wing_ip: str, wing_port: int, local_port: int,
+                 dispatcher):
+        self._wing_ip    = wing_ip
+        self._wing_port  = wing_port
+        self._local_port = local_port
+        self._dispatcher = dispatcher
+        self._sock: Optional[_socket.socket] = None
+        self._transport  = None   # asyncio transport
+
+    async def start(self, loop):
+        """Bind the socket and register it with the asyncio event loop."""
+        class _Protocol(asyncio.DatagramProtocol):
+            def __init__(self_, transport_ref):
+                self_._ref = transport_ref
+            def connection_made(self_, transport):
+                self_._ref._transport = transport
+            def datagram_received(self_, data, addr):
+                try:
+                    from pythonosc.osc_message import OscMessage
+                    msg = OscMessage(data)
+                    handlers = self_._ref._dispatcher.handlers_for_address(msg.address)
+                    for h in handlers:
+                        h.invoke(msg.address, msg.params)
+                except Exception as e:
+                    log.debug(f"[OSC recv] parse error from {addr}: {e}")
+            def error_received(self_, exc):
+                log.debug(f"[OSC recv] error: {exc}")
+            def connection_lost(self_, exc):
+                pass
+
+        self._sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        self._sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        self._sock.bind(("0.0.0.0", self._local_port))
+        self._sock.setblocking(False)
+
+        self._transport, _ = await loop.create_datagram_endpoint(
+            lambda: _Protocol(self),
+            sock=self._sock,
+        )
+        log.info(f"OSC socket bound on UDP :{self._local_port} "
+                 f"(send→receive on same port so Wing replies reach us)")
+
+    def send_message(self, address: str, args):
+        """Build and send an OSC message to the Wing."""
+        from pythonosc import osc_message_builder as _mb
+        builder = _mb.OscMessageBuilder(address=address)
+        if args is not None and args != []:
+            items = args if isinstance(args, (list, tuple)) else [args]
+            for a in items:
+                if   isinstance(a, bool):  builder.add_arg(int(a))
+                elif isinstance(a, int):   builder.add_arg(a)
+                elif isinstance(a, float): builder.add_arg(a)
+                elif isinstance(a, str):   builder.add_arg(a)
+        try:
+            msg = builder.build()
+            if self._transport:
+                self._transport.sendto(msg.dgram, (self._wing_ip, self._wing_port))
+            elif self._sock:
+                self._sock.sendto(msg.dgram, (self._wing_ip, self._wing_port))
+        except Exception as e:
+            log.warning(f"[OSC send] {address}: {e}")
+
+    def update_target(self, ip: str, port: int):
+        self._wing_ip   = ip
+        self._wing_port = port
+
+    def close(self):
+        if self._transport:
+            self._transport.close()
+
+
 class AppState:
     def __init__(self):
         self.wing_client: Optional[SimpleUDPClient] = None
@@ -204,8 +289,10 @@ async def lifespan(app: FastAPI):
     log.info(f"Wing target: {WING_IP()}:{WING_OSC_PORT()}  |  Local OSC listen: {LOCAL_OSC_PORT}")
 
     try:
-        app_state.wing_client = SimpleUDPClient(WING_IP(), WING_OSC_PORT())
-        log.info(f"OSC client ready → {WING_IP()}:{WING_OSC_PORT()}")
+        # WingOSCTransport uses ONE socket for both sending and receiving
+        # so Wing replies always come back to LOCAL_OSC_PORT where we listen.
+        # It is started inside start_osc_server() after the dispatcher is built.
+        log.info(f"Wing target: {WING_IP()}:{WING_OSC_PORT()} | local OSC port: {LOCAL_OSC_PORT}")
     except Exception as e:
         log.warning(f"Could not create OSC client: {e}")
 
@@ -224,7 +311,10 @@ async def lifespan(app: FastAPI):
     if app_state.recording:
         await stop_recording()
     if app_state.osc_server:
-        app_state.osc_server.shutdown()
+        try:
+            app_state.osc_server.close()
+        except Exception:
+            pass
 
 
 app = FastAPI(title="WING Remote", lifespan=lifespan)
@@ -303,23 +393,59 @@ async def wing_probe_loop():
 
 # ── OSC Response Parsers ──────────────────────────────────────────────────────
 
+def _wing_db_to_raw(db: float) -> float:
+    """
+    Convert Wing dB fader value to raw 0.0–1.0 position.
+
+    Piecewise formula derived from official V3.1.0 protocol docs examples:
+      raw=0.000 @ dB=-144 (−∞)   raw=0.675 @ dB=-3
+      raw=0.750 @ dB=0            raw=0.850 @ dB=+4
+      raw=0.923 @ dB=+10
+
+    Segments:
+      dB ≤ -3  : linear from (-60, 0.0) to (-3, 0.675)
+      -3..+4   : linear at 0.025 raw/dB,  0 dB = 0.75
+      +4..+10  : linear at ~0.01222 raw/dB
+    """
+    if db <= -144.0:
+        return 0.0
+    elif db < -3.0:
+        raw = 0.675 * (1.0 + (db + 3.0) / 57.0)
+        return max(0.0, raw)
+    elif db <= 4.0:
+        return 0.75 + db * 0.025
+    elif db <= 10.0:
+        return 0.85 + (db - 4.0) * (0.9233 - 0.85) / 6.0
+    else:
+        return min(1.0, 0.9233 + (db - 10.0) * 0.01)
+
+
 def parse_wing_float(args) -> float:
     """
-    Wing GET response for floats is ,sff: [ascii_label, raw_0_to_1, dB_value]
-    Wing PUSH event (/*S subscription) sends ,f: [raw_0_to_1]
-    Returns the raw 0.0–1.0 fader position.
+    Parse a Wing OSC float argument into a raw 0.0–1.0 fader position.
+
+    Wing GET response (,sff): args = (ascii_label, raw_0_to_1, dB_value)
+      → use args[1] directly — it IS the raw position.
+
+    Wing PUSH event (,f via /*S subscription): args = (dB_value,)
+      → the pushed value is in dB (e.g. -3.0, 0.0, +4.0), NOT raw 0–1.
+      → convert using _wing_db_to_raw().
+
+    The distinction: if args[0] is a string the response is a GET reply.
+    If args[0] is a float it is a subscription push carrying a dB value.
     """
     if not args:
         return 0.0
-    # ,sff format from GET: args = (label_str, raw_float, dB_float)
+    # ,sff GET reply: args[0] is the string label, args[1] is raw 0–1
     if isinstance(args[0], str) and len(args) >= 2:
         try:
             return max(0.0, min(1.0, float(args[1])))
         except (ValueError, TypeError):
             pass
-    # ,f format from /*S subscription: args = (raw_float,)
+    # ,f subscription push: args[0] is the dB value — convert to raw
     try:
-        return max(0.0, min(1.0, float(args[0])))
+        db = float(args[0])
+        return _wing_db_to_raw(db)
     except (ValueError, TypeError):
         return 0.0
 
@@ -829,12 +955,13 @@ def osc_default_handler(address: str, *args):
 async def start_osc_server():
     try:
         dispatcher = build_dispatcher()
-        server = AsyncIOOSCUDPServer(
-            ("0.0.0.0", LOCAL_OSC_PORT), dispatcher, asyncio.get_event_loop()
+        loop = asyncio.get_event_loop()
+        transport = WingOSCTransport(
+            WING_IP(), WING_OSC_PORT(), LOCAL_OSC_PORT, dispatcher
         )
-        transport, _ = await server.create_serve_endpoint()
-        app_state.osc_server = transport
-        log.info(f"OSC server listening on UDP :{LOCAL_OSC_PORT}")
+        await transport.start(loop)
+        app_state.wing_client = transport
+        app_state.osc_server  = transport   # kept for shutdown reference
     except Exception as e:
         log.error(f"OSC server failed to start: {e}")
 
@@ -1224,7 +1351,8 @@ async def setup_apply(payload: dict):
     try:
         # Update the live Wing target — takes effect immediately, no restart needed
         set_wing_target(new_ip, new_port)
-        app_state.wing_client = SimpleUDPClient(new_ip, new_port)
+        if app_state.wing_client:
+            app_state.wing_client.update_target(new_ip, new_port)
         # Send initial subscription to new endpoint
         app_state.wing_client.send_message(WING_SUBSCRIBE, [])
         # Force probe loop to check connectivity right away

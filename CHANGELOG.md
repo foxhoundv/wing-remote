@@ -177,3 +177,53 @@ meter engine, and UI — was rebuilt from scratch against the official
 - Multitrack WAV recording via sounddevice + soundfile
 - Docker + docker-compose deployment
 - Basic fader, mute, solo, pan controls via OSC
+
+---
+
+## [2.0.1] — 2026-03-26
+
+### Fixed
+
+- **Gate ON/OFF toggle**: Toggling gate on/off caused the section content to disappear.
+  Root cause: `_csSendToggle` was calling `_csShowSection` (which itself calls `_csRenderNavRail`)
+  and then calling `_csRenderNavRail` again — the double render race cleared the DOM.
+  Fixed by rewriting `_csSendToggle` to render the section content directly without
+  the cascading call chain.
+
+- **EQ detail panel**: Replaced the simple 6-knob grid with full per-band detail:
+  - **Low Shelf**: Lo-Cut enable/disable toggle (with status indicator), Gain L slider,
+    Frequency L slider (log-scale 20 Hz–20 kHz)
+  - **PEQ 1–4**: Gain, Frequency, and Q (bandwidth) sliders per band with live dB/Hz labels
+  - **High Shelf**: Hi-Cut enable/disable toggle, Gain H slider, Frequency H slider
+  - Band selector tabs across the top with gain colour coding (green=boost, red=cut)
+  - Main EQ graph redraws on every parameter change; frequency uses proper log scale
+
+- **Dynamics envelope graph**: Added a working `ENVELOPE` canvas panel next to the
+  transfer curve. Attack adjusts the left rising slope, Hold expands/shrinks the flat
+  top, Release adjusts the right falling slope. Control point circles show at each
+  vertex. All three parameters are sliders connected to OSC sends.
+
+- **Main Sends pan visualiser**: The pan knob had no visual feedback. Replaced the
+  non-functional circular scope with a horizontal L–R bar: a track spanning the full
+  width with a blue puck that moves left/right as pan changes, filled region showing
+  the pan direction, and L/C/R labels.
+
+- **Main Sends fader column width**: When a send level displayed −∞ or a double-digit
+  dB value (e.g. −12.3 dB), the column would shift in width. Fixed by giving every
+  dB display a fixed `width:52px` container with `overflow:hidden`.
+
+- **Bus Sends layout**: Replaced the 4×4 grid with vertical channel strips (one per bus)
+  matching the look of the main mixer strips. Each bus strip now shows:
+  - Bus name
+  - **TAP** toggle (PRE / POST) — highlighted blue for POST, amber for PRE
+  - Fixed-width dB display
+  - Vertical fader
+  - ON/OFF toggle
+  - **PAN LNK** toggle (pan link on/off) — highlighted green when linked
+  All 16 buses scroll horizontally.
+
+### Changed
+
+- `_csDynParam` renamed to `_csDynEnvParam` for envelope-specific parameters
+  (attack, hold, release) to distinguish them from transfer-curve parameters
+  (threshold, ratio, knee) which use a separate handler.

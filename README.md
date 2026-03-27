@@ -316,3 +316,61 @@ wing-remote/
 ## License
 
 MIT
+
+---
+
+## Channel Settings Panel
+
+Click any channel name strip to open the full channel settings view. The mixer strips
+slide away and a Wing-style editor takes over the center area.
+
+### Navigation (left rail)
+
+Nine sections with mini-thumbnail previews:
+
+| Section | Thumbnail preview |
+|---|---|
+| Home | Color bar + name |
+| Gain | Yellow gain bar height |
+| Gate | Transfer curve (blue when ON) |
+| EQ | Frequency response curve |
+| Dynamics | Compressor curve (orange when ON) |
+| Insert 1 / 2 | FX slot color + type name |
+| Main Sends | Pan puck position |
+| Bus Sends | 16 send level bars |
+
+### EQ — per-band detail
+
+- **Band tabs**: Low Shelf, PEQ 1–4, High Shelf — each tab colour-coded by gain amount
+- **Low Shelf**: Lo-Cut filter on/off + Gain L + Frequency L (log-scale)
+- **PEQ 1–4**: Gain, Frequency (log), and Q per band — all with live value labels
+- **High Shelf**: Hi-Cut filter on/off + Gain H + Frequency H (log-scale)
+- Main EQ graph redraws on every slider movement
+
+### Dynamics — dual graph view
+
+Left panel: compressor transfer curve (threshold, ratio, knee).
+Right panel: envelope graph showing the attack (left slope), hold (flat top),
+and release (right slope) as a trapezoid shape with draggable control points.
+All six parameters send OSC to the Wing immediately.
+
+### Bus Sends — vertical strip layout
+
+16 vertical channel strips, each showing:
+- Bus name
+- **TAP** toggle — PRE (amber) or POST (blue); toggles the send tap point
+- Fixed-width dB level display (no layout shift at any dB value)
+- Vertical fader
+- ON/OFF button
+- **PAN LNK** toggle — links send pan to channel pan
+
+### Main Sends & Panning
+
+Four vertical faders (M1–M4) with fixed-width dB labels plus a horizontal
+pan bar visualiser — a track with a blue puck that moves between L and R
+as the pan value changes.
+
+### Automatic save
+
+All parameter changes are sent to the Wing via OSC as you make them.
+There is no Save button — changes are live.
