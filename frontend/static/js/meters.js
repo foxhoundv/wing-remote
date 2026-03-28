@@ -6,95 +6,111 @@ const meterTargets = {};  // { "1": 0.75, ... } keyed by 1-based channel number
 
 function applyMeterValues(levels) {
   // levels keys from backend:
-  //   "ch-1"       → output_L VU level (0.0-1.0)
+  //   "ch-1"       → output_L VU level (0.0–1.0)
   //   "ch-1-r"     → output_R VU level
-  //   "ch-1-in"    → input_L level
+  //   "ch-1-in"    → input_L level (pre-fader)
   //   "ch-1-gate"  → gate state (0 or 1)
   //   "ch-1-dyn"   → dyn/comp state (0 or 1)
-  const smap = {ch:'channels',aux:'aux',bus:'buses',main:'mains',mtx:'matrix'};
+  if (!levels || Object.keys(levels).length === 0) return;
+
+  // Mark that real hardware data is now flowing
+  _metersHaveLiveData = true;
+
+  const smap = {ch:'channels', aux:'aux', bus:'buses', main:'mains', mtx:'matrix'};
 
   Object.entries(levels).forEach(([key, val]) => {
-    if (key.endsWith('-gate') || key.endsWith('-dyn') || key.endsWith('-r') || key.endsWith('-in')) {
-      // State/secondary keys — update strip state and LED DOM
-      const parts    = key.split('-');
-      const suffix   = parts[parts.length - 1];          // 'gate','dyn','r','in'
-      const stripKey = parts[0];                          // 'ch','aux', etc.
-      const id       = parseInt(parts[1]);
-      const arrKey   = smap[stripKey];
-      const arr      = arrKey ? state[arrKey] : null;
-      const strip    = arr ? arr[id-1] : null;
+    const clamped = Math.max(0, Math.min(1, val));
+    const parts   = key.split('-');
+    const suffix  = parts.length > 2 ? parts[parts.length - 1] : null;
 
+    if (suffix === 'gate' || suffix === 'dyn') {
+      // LED state
+      const stripKey = parts[0], id = parseInt(parts[1]);
+      const arr      = smap[stripKey] ? state[smap[stripKey]] : null;
+      const strip    = arr ? arr[id - 1] : null;
       if (suffix === 'gate' && strip) {
         strip.gateActive = val > 0;
-        const el = document.getElementById(`led-gate-${stripKey}-${id}`);
-        el?.classList.toggle('gate-active', strip.gateActive);
+        document.getElementById(`led-gate-${stripKey}-${id}`)
+          ?.classList.toggle('gate-active', strip.gateActive);
       } else if (suffix === 'dyn' && strip) {
         strip.dynActive = val > 0;
-        const el = document.getElementById(`led-dyn-${stripKey}-${id}`);
-        el?.classList.toggle('dyn-active', strip.dynActive);
-      } else if (suffix === 'r') {
-        // Right channel meter — update fill-r element directly
-        const el = document.getElementById(`fill-r-${stripKey}-${id}`);
-        if (el) el.style.height = (Math.max(0, Math.min(1, val)) * 100) + '%';
+        document.getElementById(`led-dyn-${stripKey}-${id}`)
+          ?.classList.toggle('dyn-active', strip.dynActive);
       }
-      // 'in' key (input level) stored but not separately displayed yet
+    } else if (suffix === 'in') {
+      // Pre-fader input level — store in meterTargets with -in suffix for future use
+      meterTargets[key] = clamped;
     } else {
-      // Primary output_L level — goes into meterTargets for animation
-      meterTargets[key] = Math.max(0, Math.min(1, val));
+      // Primary output_L or output_R — both go into meterTargets
+      // animateMeters reads ch-N for left and ch-N-r for right
+      meterTargets[key] = clamped;
     }
   });
 }
 
+// Track whether we have received at least one real meter packet from Wing
+let _metersHaveLiveData = false;
+
 function animateMeters() {
-  // Animate the currently VISIBLE strips only (whichever layer is shown)
   const layer = LAYERS[state.currentLayer];
   if (!layer) { requestAnimationFrame(animateMeters); return; }
+
   const allStrips  = layer.strips();
   const start      = activeTabIndex * layer.tabSize;
   const page       = allStrips.slice(start, start + layer.tabSize);
   const stripType_ = layer.stripType;
+  const wingConnected = state.ws && state.ws.readyState === 1;
 
   page.forEach(ch => {
-    const chKey  = `${stripType_}-${ch.id}`;
-    const wingConnected = state.ws && state.ws.readyState === 1;
-
-    // Real values from Wing when connected, fake animation when not
+    const chKey = `${stripType_}-${ch.id}`;
     let target;
-    if (meterTargets[chKey] !== undefined) {
-      // Real hardware value from Wing meter engine (all strip types)
+
+    if (_metersHaveLiveData && meterTargets[chKey] !== undefined) {
+      // Live hardware level from Wing binary meter engine
       target = meterTargets[chKey];
     } else if (!wingConnected) {
-      // Wing not connected — show fake animation so UI looks alive
+      // Wing offline — show gentle fake animation so strips look alive
       const t = Date.now() / 1000;
-      target = ch.muted ? 0 : ch.fader * (0.5 + 0.3 * Math.sin(t * 2.1 + ch.id));
+      target = ch.muted ? 0 : ch.fader * (0.45 + 0.28 * Math.sin(t * 1.9 + ch.id * 0.7));
     } else {
-      // Connected but no meter data yet — show nothing
+      // Connected but meter data not yet flowing — decay to zero
       target = 0;
     }
 
+    // Smooth interpolation: fast attack (0.45), slow release (0.12)
     const current = ch.meter[0] || 0;
     const diff    = target - current;
-    ch.meter[0]   = current + diff * (diff > 0 ? 0.4 : 0.15);
-    ch.meter[1]   = ch.meter[0] * (0.95 + Math.random() * 0.05);
+    ch.meter[0]   = current + diff * (diff > 0 ? 0.45 : 0.12);
 
     const fl = document.getElementById(`fill-l-${chKey}`);
     if (fl) fl.style.height = (ch.meter[0] * 100) + '%';
-    // fill-r is updated directly by applyMeterValues with the real R channel value
 
-    ch.clip[0] = ch.meter[0] > 0.95;
-    document.getElementById(`clip-l-${chKey}`)?.classList.toggle('active', ch.clip[0]);
-    document.getElementById(`clip-r-${chKey}`)?.classList.toggle('active', ch.clip[0]);
+    // Right channel — smooth the same way using ch.meter[1]
+    const rKey    = `${chKey}-r`;
+    const rTarget = (_metersHaveLiveData && meterTargets[rKey] !== undefined)
+      ? meterTargets[rKey] : ch.meter[0];
+    const rCurrent = ch.meter[1] || 0;
+    const rDiff    = rTarget - rCurrent;
+    ch.meter[1]    = rCurrent + rDiff * (rDiff > 0 ? 0.45 : 0.12);
+    const fr = document.getElementById(`fill-r-${chKey}`);
+    if (fr) fr.style.height = (ch.meter[1] * 100) + '%';
 
-    // EQ mini canvas (channels/aux/buses only)
+    // Clip LEDs — light when either channel peaks above -1 dBFS (≈ 0.983)
+    const clipping = ch.meter[0] > 0.983 || ch.meter[1] > 0.983;
+    ch.clip[0] = clipping;
+    document.getElementById(`clip-l-${chKey}`)?.classList.toggle('active', clipping);
+    document.getElementById(`clip-r-${chKey}`)?.classList.toggle('active', clipping);
+
+    // EQ mini canvas
     const eqC = document.getElementById(`eq-mini-${chKey}`);
     if (eqC) drawEqMini(eqC, ch.eqBands, layer.color);
   });
 
-  // Also update the full meters view if it's open
+  // Meters view — update all visible mv-* bars directly from live targets
   if (state._metersViewActive) {
     Object.entries(meterTargets).forEach(([key, val]) => {
       const el = document.getElementById(`mv-${key}`);
-      if (el) el.style.height = (val * 100) + '%';
+      if (el) el.style.height = (Math.max(0, Math.min(1, val)) * 100) + '%';
     });
   }
 

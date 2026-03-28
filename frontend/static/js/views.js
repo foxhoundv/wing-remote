@@ -318,22 +318,48 @@ async function _loadUtilityStatus() {
 function renderMetersView() {
   const grid = document.getElementById('metersGrid');
   if (!grid) return;
-  // Show all 40 channels as tall narrow VU meters
-  grid.innerHTML = state.channels.map((ch, i) => {
-    const key = `ch-${ch.id}`;
+
+  // Helper: build one VU column for any strip type
+  function vuStrip(key, label, height, accent) {
     const lvl = (meterTargets[key] || 0) * 100;
     return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-      <div style="width:28px;height:120px;background:var(--meter-bg);border-radius:2px;
+      <div style="width:22px;height:${height}px;background:var(--meter-bg);border-radius:2px;
         border:1px solid var(--border);overflow:hidden;display:flex;align-items:flex-end;">
         <div id="mv-${key}" style="width:100%;height:${lvl}%;
-          background:linear-gradient(to top,var(--green) 0%,var(--green) 70%,var(--amber) 85%,var(--red) 100%);
-          transition:height .05s linear;"></div>
+          background:linear-gradient(to top,${accent} 0%,${accent} 70%,var(--amber) 85%,var(--red) 100%);
+          transition:height .04s linear;"></div>
       </div>
-      <div style="font-size:8px;color:var(--text-muted);text-align:center;width:28px;
-        overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${ch.name}</div>
+      <div style="font-size:7px;color:var(--text-muted);text-align:center;width:22px;
+        overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${label}</div>
     </div>`;
+  }
+
+  // Section header label
+  function sectionLabel(text) {
+    return `<div style="display:flex;align-items:flex-end;padding-bottom:4px;margin-right:6px;">
+      <span style="font-size:8px;font-weight:700;letter-spacing:1px;color:var(--text-muted);
+        writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;">${text}</span>
+    </div>`;
+  }
+
+  const sections = [
+    { strips: state.channels, key:'ch',   label:'CH',   height:140, accent:'var(--orange)' },
+    { strips: state.aux,      key:'aux',  label:'AUX',  height:120, accent:'var(--blue)'   },
+    { strips: state.buses,    key:'bus',  label:'BUS',  height:110, accent:'var(--cyan)'   },
+    { strips: state.mains,    key:'main', label:'MAIN', height:100, accent:'var(--red)'    },
+    { strips: state.matrix,   key:'mtx',  label:'MTX',  height:100, accent:'var(--green)'  },
+  ];
+
+  grid.innerHTML = sections.map(sec => {
+    const strips = sec.strips.map(strip => {
+      const key   = `${sec.key}-${strip.id}`;
+      const label = strip.name || `${sec.label}${strip.id}`;
+      return vuStrip(key, label, sec.height, sec.accent);
+    }).join('');
+    return `<div style="display:contents;">${strips}</div>
+      <div style="width:1px;background:var(--border);margin:0 4px;align-self:stretch;"></div>`;
   }).join('');
-  // Keep updating meter view bars
+
   state._metersViewActive = true;
 }
 

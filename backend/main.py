@@ -1573,35 +1573,38 @@ for _tok, _cnt, _key in METER_STRIP_SPECS:
 METER_TOTAL_STRIPS = len(METER_STRIP_ORDER)
 
 
-def _build_meter_request(udp_port: int, report_id: int) -> bytes:
+def _build_meter_request(udp_port: int, report_id: int) -> tuple[bytes, bytes]:
     """
-    Build the binary meter subscription packet for Wing channel 3.
-    Requests all strip types: channels, aux, bus, main, matrix, DCA.
+    Build the binary meter subscription for Wing channel 3.
+
+    Returns two packets that must be sent as separate TCP writes, matching
+    the two-step sequence in the Wing V3.1.0 protocol docs:
+      packet1 — declare the UDP return port
+      packet2 — set report ID and define the meter collection
+
     Wing returns meter data in exactly the order requested.
     """
-    # Select channel 3 (meters) in NRP framing
     select_ch3 = bytes([0xDF, 0xD3])
 
-    # Token 0xD3: declare UDP return port (2 bytes big-endian)
+    # Packet 1: declare UDP return port (token 0xD3 + 2-byte big-endian port)
     port_hi  = (udp_port >> 8) & 0xFF
     port_lo  = udp_port & 0xFF
-    set_port = _nrp_escape(bytes([0xD3, port_hi, port_lo]))
+    port_pkt = select_ch3 + _nrp_escape(bytes([0xD3, port_hi, port_lo]))
 
-    # Token 0xD4: report id (4 bytes big-endian)
-    set_id = _nrp_escape(bytes([0xD4]) + report_id.to_bytes(4, 'big'))
-
-    # Meter collection: 0xDC <type_token> <0-based-idx> ... 0xDE
+    # Packet 2: set report ID (0xD4) + meter collection (0xDC … 0xDE)
+    set_id = bytes([0xD4]) + report_id.to_bytes(4, 'big')
     collection = bytearray([0xDC])
     for type_token, count, _ in METER_STRIP_SPECS:
         for idx in range(count):
             collection += bytes([type_token, idx])
     collection += bytes([0xDE])
+    coll_pkt = select_ch3 + _nrp_escape(set_id + bytes(collection))
 
-    return select_ch3 + set_port + set_id + _nrp_escape(bytes(collection))
+    return port_pkt, coll_pkt
 
 
 def _build_meter_renew(report_id: int) -> bytes:
-    """Renew packet: just resend the report_id token to reset 5s timeout."""
+    """Renew packet: resend the report_id token to reset the 5 s Wing timeout."""
     select_ch3 = bytes([0xDF, 0xD3])
     id_bytes   = report_id.to_bytes(4, 'big')
     return select_ch3 + _nrp_escape(bytes([0xD4]) + id_bytes)
@@ -1616,50 +1619,66 @@ def _raw_to_level(chunk_bytes: bytes, word_idx: int) -> float:
     return round((clamped + 60.0) / 60.0, 4)
 
 
+# Per-strip word counts from Wing V3.1.0 Table 5.
+# channel/aux/bus/main/matrix: 8 words (16 bytes)
+# dca: 4 words (8 bytes) — pre/post fader L+R only, no gate/dyn words
+METER_WORDS_PER_STRIP = {
+    "ch":   8,
+    "aux":  8,
+    "bus":  8,
+    "main": 8,
+    "mtx":  8,
+    "dca":  4,   # pre-fader L/R, post-fader L/R — no gate/dyn words
+}
+
+
 def _parse_meter_udp(data: bytes) -> dict:
     """
     Parse a Wing meter UDP packet containing all requested strip types.
-    Format: 4-byte report_id + (8 words × 2 bytes) per strip, in request order.
+    Format: 4-byte report_id followed by strips in subscription order.
 
-    Words per strip (channels / aux / bus / main / matrix):
-      0: in_L    1: in_R    2: out_L   3: out_R
-      4: gate_key  5: gate_gain  6: dyn_key  7: dyn_gain
+    Word layout per strip type (signed int16 big-endian, 1/256 dB):
+      channel/aux/bus/main/matrix (8 words = 16 bytes):
+        0: in_L   1: in_R   2: out_L  3: out_R
+        4: gate_key  5: gate_gain  6: dyn_key  7: dyn_gain
+      dca (4 words = 8 bytes):
+        0: pre_fader_L  1: pre_fader_R  2: post_fader_L  3: post_fader_R
 
     Returns flat dict keyed by "stripType-id":
-      "ch-1":        0.0-1.0  output level (VU meter)
-      "ch-1-r":      0.0-1.0  output level right channel
-      "ch-1-gate":   0 or 1   gate open/closed
-      "ch-1-dyn":    0 or 1   compressor active
-      "ch-1-in":     0.0-1.0  input level (pre-fader)
-    DCA groups carry no audio — omitted from result.
+      "ch-1"        → 0.0–1.0 output level (VU)
+      "ch-1-r"      → 0.0–1.0 right-channel output level
+      "ch-1-in"     → 0.0–1.0 input level (pre-fader)
+      "ch-1-gate"   → 0 or 1  gate state
+      "ch-1-dyn"    → 0 or 1  compressor state
+    DCA are omitted from the result (no meaningful audio metering for a VU strip).
     """
     if len(data) < 4:
         return {}
 
     payload = data[4:]   # skip 4-byte report ID
-    BYTES   = 16         # 8 words × 2 bytes per strip
+    offset  = 0
     result  = {}
 
-    for strip_idx, (strip_key, strip_num) in enumerate(METER_STRIP_ORDER):
-        offset = strip_idx * BYTES
-        if offset + BYTES > len(payload):
+    for strip_key, strip_num in METER_STRIP_ORDER:
+        words = METER_WORDS_PER_STRIP.get(strip_key, 8)
+        nbytes = words * 2
+        if offset + nbytes > len(payload):
             break
-        chunk = payload[offset : offset + BYTES]
+        chunk  = payload[offset : offset + nbytes]
+        offset += nbytes
 
         if strip_key == "dca":
-            continue   # DCA has no audio meters
+            continue   # no meaningful VU display for DCA groups
 
         key = f"{strip_key}-{strip_num}"
 
-        # Output levels (post-fader) — words 2 (L) and 3 (R)
-        result[key]         = _raw_to_level(chunk, 2)   # out_L  (primary VU)
-        result[f"{key}-r"]  = _raw_to_level(chunk, 3)   # out_R
+        # Primary VU: output_L (word 2)
+        result[key]         = _raw_to_level(chunk, 2)
+        result[f"{key}-r"]  = _raw_to_level(chunk, 3)   # output_R
+        result[f"{key}-in"] = _raw_to_level(chunk, 0)   # input_L
 
-        # Input levels (pre-fader) — words 0 (L) and 1 (R)
-        result[f"{key}-in"] = _raw_to_level(chunk, 0)   # in_L
-
-        # Gate and dynamics state — words 4 and 6 (key = 0 closed, 1 open)
-        gate_raw = int.from_bytes(chunk[8:10], 'big', signed=True)
+        # Gate/dyn state from word 4 and word 6
+        gate_raw = int.from_bytes(chunk[8:10],  'big', signed=True)
         dyn_raw  = int.from_bytes(chunk[12:14], 'big', signed=True)
         result[f"{key}-gate"] = 1 if gate_raw > 0 else 0
         result[f"{key}-dyn"]  = 1 if dyn_raw  > 0 else 0
@@ -1719,13 +1738,21 @@ async def meter_engine():
             backoff = min(backoff * 1.5, 30.0)
             continue
 
-        # ── Send initial meter subscription ──────────────────────────────
+        # ── Send initial meter subscription (two writes, matching doc example) ─
         try:
-            req = _build_meter_request(METER_UDP_PORT, METER_REPORT_ID)
-            tcp_writer.write(req)
+            port_pkt, coll_pkt = _build_meter_request(METER_UDP_PORT, METER_REPORT_ID)
+            # Step 1: declare UDP return port
+            tcp_writer.write(port_pkt)
+            await tcp_writer.drain()
+            await asyncio.sleep(0.05)   # brief pause between declarations
+            # Step 2: set report ID + collection
+            tcp_writer.write(coll_pkt)
             await tcp_writer.drain()
             last_renew = asyncio.get_event_loop().time()
-            log.info(f"Meter subscription sent ({METER_TOTAL_STRIPS} strips: ch/aux/bus/main/mtx/dca)")
+            log.info(
+                "Meter subscription sent (%d strips) — port=%d id=%d",
+                METER_TOTAL_STRIPS, METER_UDP_PORT, METER_REPORT_ID,
+            )
         except Exception as e:
             log.warning(f"Meter subscription send failed: {e}")
             tcp_writer.close()
@@ -1735,6 +1762,9 @@ async def meter_engine():
 
         # ── Receive meter UDP packets ─────────────────────────────────────
         loop = asyncio.get_event_loop()
+        pkt_count      = 0      # total UDP packets received this session
+        pkt_log_next   = 10.0  # log first packet count after 10 s
+        last_pkt_time  = None
         try:
             while True:
                 now = loop.time()
@@ -1745,23 +1775,51 @@ async def meter_engine():
                     tcp_writer.write(renew)
                     await tcp_writer.drain()
                     last_renew = now
+                    # Warn if we haven't received a single UDP packet since subscribing
+                    if pkt_count == 0:
+                        log.warning(
+                            "Meter: no UDP packets received yet — check Wing OSC/Meter "
+                            "settings and that UDP port %d is reachable from Wing",
+                            METER_UDP_PORT,
+                        )
 
                 # Non-blocking UDP read
                 try:
-                    data, _ = udp_sock.recvfrom(4096)
+                    data, addr = udp_sock.recvfrom(8192)
                     if data:
+                        pkt_count += 1
+                        last_pkt_time = now
+                        if pkt_count == 1:
+                            log.info(
+                                "Meter: first UDP packet received from %s (%d bytes) — "
+                                "hardware meters now live", addr, len(data)
+                            )
                         levels = _parse_meter_udp(data)
                         if levels:
                             _live_meters.update(levels)
-                            # Broadcast all strip meter levels to browsers
                             if app_state.ws_clients:
                                 await broadcast({"type": "meters", "levels": levels})
+                        elif pkt_count <= 3:
+                            log.warning(
+                                "Meter: packet %d from %s parsed to empty dict "
+                                "(len=%d) — possible format mismatch",
+                                pkt_count, addr, len(data)
+                            )
                 except BlockingIOError:
                     pass  # No data yet — normal
                 except Exception as e:
                     log.warning(f"Meter UDP recv error: {e}")
 
-                await asyncio.sleep(0.033)   # ~30 fps poll rate
+                # Periodic packet-count log so operator can confirm data is flowing
+                if now >= pkt_log_next and pkt_count > 0:
+                    elapsed = now - (loop.time() - pkt_count * 0.05)  # rough
+                    log.info(
+                        "Meter: %d UDP packets received this session (last from Wing ~%.1fs ago)",
+                        pkt_count, now - last_pkt_time if last_pkt_time else 0,
+                    )
+                    pkt_log_next = now + 60.0   # log again every 60 s
+
+                await asyncio.sleep(0.025)   # ~40 fps poll rate
 
         except Exception as e:
             log.warning(f"Meter loop error: {e}")
@@ -1770,7 +1828,9 @@ async def meter_engine():
             except: pass
             try: udp_sock.close()
             except: pass
-            log.info("Meter connection lost — reconnecting…")
+            log.info(
+                "Meter connection lost after %d packets — reconnecting…", pkt_count
+            )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 1.5, 30.0)
 
