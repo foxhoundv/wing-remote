@@ -1,5 +1,5 @@
 """
-WING Remote v2.2.2 - FastAPI Backend
+WING Remote v2.3.0 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 
@@ -565,6 +565,36 @@ def build_dispatcher() -> Dispatcher:
     d.map("/ch/*/send/*/*",  handle_ch_send)
     d.map("/aux/*/send/*/*", handle_aux_send)
 
+    # Input options (phantom power, invert, HPF/LPF, delay)
+    d.map("/ch/*/gain",    handle_ch_gain)
+    d.map("/ch/*/trim",    handle_ch_trim)
+    d.map("/ch/*/phantom", handle_ch_phantom)
+    d.map("/ch/*/inv",     handle_ch_invert)
+    d.map("/ch/*/hpf/on",  handle_ch_hpf_on)
+    d.map("/ch/*/hpf/f",   handle_ch_hpf_freq)
+    d.map("/ch/*/lpf/on",  handle_ch_lpf_on)
+    d.map("/ch/*/lpf/f",   handle_ch_lpf_freq)
+    d.map("/ch/*/dly/on",  handle_ch_dly_on)
+    d.map("/ch/*/dly/time",handle_ch_dly_time)
+    d.map("/ch/*/icon",    handle_ch_icon)
+    d.map("/ch/*/col",     handle_ch_col)
+
+    # Aux input options
+    d.map("/aux/*/gain",    handle_aux_gain)
+    d.map("/aux/*/trim",    handle_aux_trim)
+    d.map("/aux/*/icon",    handle_aux_icon)
+    d.map("/aux/*/col",     handle_aux_col)
+
+    # Insert states (channels)
+    d.map("/ch/*/preins/on",   handle_ch_preins_on)
+    d.map("/ch/*/preins/ins",  handle_ch_preins_ins)
+    d.map("/ch/*/postins/on",  handle_ch_postins_on)
+    d.map("/ch/*/postins/ins", handle_ch_postins_ins)
+
+    # Insert states (aux)
+    d.map("/aux/*/preins/on",  handle_aux_preins_on)
+    d.map("/aux/*/preins/ins", handle_aux_preins_ins)
+
     d.set_default_handler(osc_default_handler)
     return d
 
@@ -575,6 +605,135 @@ def _ch_num(address: str, seg: int = 2) -> Optional[str]:
         return str(int(address.split("/")[seg]))
     except (IndexError, ValueError):
         return None
+
+
+# ── Input Options Handlers ────────────────────────────────────────────────────
+
+def _set_ch(address, key, value, broadcast_type="input_options"):
+    ch = _ch_num(address)
+    if not ch: return
+    app_state.mixer["channels"].setdefault(ch, {})[key] = value
+    asyncio.create_task(broadcast({"type": broadcast_type, "strip": "ch", "ch": ch, "key": key, "value": value}))
+
+def _set_aux(address, key, value, broadcast_type="input_options"):
+    n = _ch_num(address)
+    if not n: return
+    app_state.mixer["aux"].setdefault(n, {})[key] = value
+    asyncio.create_task(broadcast({"type": broadcast_type, "strip": "aux", "ch": n, "key": key, "value": value}))
+
+def handle_ch_gain(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    app_state.mixer["channels"].setdefault(ch, {})["gain"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "gain", "value": val}))
+
+def handle_ch_trim(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    app_state.mixer["channels"].setdefault(ch, {})["trim"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "trim", "value": val}))
+
+def handle_ch_phantom(address, *args):  _set_ch(address, "phantom", bool(parse_wing_int(args)))
+def handle_ch_invert(address, *args):   _set_ch(address, "invert",  bool(parse_wing_int(args)))
+def handle_ch_hpf_on(address, *args):   _set_ch(address, "locut",   bool(parse_wing_int(args)))
+def handle_ch_hpf_freq(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 80.0
+    app_state.mixer["channels"].setdefault(ch, {})["locut_freq"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "locut_freq", "value": val}))
+def handle_ch_lpf_on(address, *args):   _set_ch(address, "hicut",  bool(parse_wing_int(args)))
+def handle_ch_lpf_freq(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 18000.0
+    app_state.mixer["channels"].setdefault(ch, {})["hicut_freq"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "hicut_freq", "value": val}))
+def handle_ch_dly_on(address, *args):   _set_ch(address, "delay", bool(parse_wing_int(args)))
+def handle_ch_dly_time(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    app_state.mixer["channels"].setdefault(ch, {})["delay_time"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "delay_time", "value": val}))
+def handle_ch_icon(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = parse_wing_int(args)
+    app_state.mixer["channels"].setdefault(ch, {})["iconId"] = val
+    asyncio.create_task(broadcast({"type": "icon", "strip": "ch", "ch": ch, "value": val}))
+def handle_ch_col(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = parse_wing_int(args)
+    app_state.mixer["channels"].setdefault(ch, {})["colorIdx"] = val
+    asyncio.create_task(broadcast({"type": "color", "strip": "ch", "ch": ch, "value": val}))
+
+# Aux input options
+def handle_aux_gain(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    app_state.mixer["aux"].setdefault(n, {})["gain"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "aux", "ch": n, "key": "gain", "value": val}))
+def handle_aux_trim(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    app_state.mixer["aux"].setdefault(n, {})["trim"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "aux", "ch": n, "key": "trim", "value": val}))
+def handle_aux_icon(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = parse_wing_int(args)
+    app_state.mixer["aux"].setdefault(n, {})["iconId"] = val
+    asyncio.create_task(broadcast({"type": "icon", "strip": "aux", "ch": n, "value": val}))
+def handle_aux_col(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = parse_wing_int(args)
+    app_state.mixer["aux"].setdefault(n, {})["colorIdx"] = val
+    asyncio.create_task(broadcast({"type": "color", "strip": "aux", "ch": n, "value": val}))
+
+# Insert handlers
+def handle_ch_preins_on(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["channels"].setdefault(ch, {}).setdefault("ins1", {})["on"] = val
+    asyncio.create_task(broadcast({"type": "insert", "strip": "ch", "ch": ch, "slot": 1, "key": "on", "value": val}))
+def handle_ch_preins_ins(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = str(args[0]) if args else "NONE"
+    app_state.mixer["channels"].setdefault(ch, {}).setdefault("ins1", {})["type"] = val
+    asyncio.create_task(broadcast({"type": "insert", "strip": "ch", "ch": ch, "slot": 1, "key": "type", "value": val}))
+def handle_ch_postins_on(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["channels"].setdefault(ch, {}).setdefault("ins2", {})["on"] = val
+    asyncio.create_task(broadcast({"type": "insert", "strip": "ch", "ch": ch, "slot": 2, "key": "on", "value": val}))
+def handle_ch_postins_ins(address, *args):
+    ch = _ch_num(address)
+    if not ch: return
+    val = str(args[0]) if args else "NONE"
+    app_state.mixer["channels"].setdefault(ch, {}).setdefault("ins2", {})["type"] = val
+    asyncio.create_task(broadcast({"type": "insert", "strip": "ch", "ch": ch, "slot": 2, "key": "type", "value": val}))
+def handle_aux_preins_on(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = bool(parse_wing_int(args))
+    app_state.mixer["aux"].setdefault(n, {}).setdefault("ins1", {})["on"] = val
+    asyncio.create_task(broadcast({"type": "insert", "strip": "aux", "ch": n, "slot": 1, "key": "on", "value": val}))
+def handle_aux_preins_ins(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = str(args[0]) if args else "NONE"
+    app_state.mixer["aux"].setdefault(n, {}).setdefault("ins1", {})["type"] = val
+    asyncio.create_task(broadcast({"type": "insert", "strip": "aux", "ch": n, "slot": 1, "key": "type", "value": val}))
 
 
 # Channel handlers
@@ -994,9 +1153,11 @@ async def websocket_endpoint(websocket: WebSocket):
         "wing_ip": WING_IP(),
         "wing_port": WING_OSC_PORT(),
     }))
-    # Trigger a fresh query from the Wing to get latest values
-    # (runs in background so the WebSocket isn't blocked)
-    asyncio.create_task(bulk_query_wing())
+    # Don't flood the Wing with bulk queries on every browser open.
+    # The probe loop already triggers bulk_query_wing() when Wing connects.
+    # We only re-query if the browser is connecting and mixer state is empty.
+    if not any(app_state.mixer["channels"].values()):
+        asyncio.create_task(bulk_query_wing())
     try:
         async for raw in websocket.iter_text():
             await handle_ws_message(raw, websocket)
@@ -1419,10 +1580,17 @@ async def bulk_query_wing():
     # Build list of all paths to query
     queries: list[str] = []
 
-    # Channels 1..40 — core parameters
+    # Channels 1..40 — all parameters
     for n in range(1, QUERY_CHANNELS + 1):
         queries += [f"/ch/{n}/name", f"/ch/{n}/fdr", f"/ch/{n}/mute",
                     f"/ch/{n}/pan",  f"/ch/{n}/$solo",
+                    f"/ch/{n}/icon", f"/ch/{n}/col",
+                    # Input options
+                    f"/ch/{n}/gain", f"/ch/{n}/trim",
+                    f"/ch/{n}/phantom", f"/ch/{n}/inv",
+                    f"/ch/{n}/hpf/on", f"/ch/{n}/hpf/f",
+                    f"/ch/{n}/lpf/on", f"/ch/{n}/lpf/f",
+                    f"/ch/{n}/dly/on", f"/ch/{n}/dly/time",
                     # EQ
                     f"/ch/{n}/eq/on",
                     f"/ch/{n}/eq/1g", f"/ch/{n}/eq/1f", f"/ch/{n}/eq/1q",
@@ -1431,31 +1599,41 @@ async def bulk_query_wing():
                     f"/ch/{n}/eq/4g", f"/ch/{n}/eq/4f", f"/ch/{n}/eq/4q",
                     # Dynamics
                     f"/ch/{n}/dyn/on",  f"/ch/{n}/dyn/thr", f"/ch/{n}/dyn/ratio",
-                    f"/ch/{n}/dyn/att", f"/ch/{n}/dyn/rel",  f"/ch/{n}/dyn/gain",
-                    f"/ch/{n}/dyn/knee",
+                    f"/ch/{n}/dyn/att", f"/ch/{n}/dyn/hld", f"/ch/{n}/dyn/rel",
+                    f"/ch/{n}/dyn/gain", f"/ch/{n}/dyn/knee",
                     # Gate
                     f"/ch/{n}/gate/on",  f"/ch/{n}/gate/thr",   f"/ch/{n}/gate/range",
-                    f"/ch/{n}/gate/att", f"/ch/{n}/gate/rel",
+                    f"/ch/{n}/gate/att", f"/ch/{n}/gate/hld",   f"/ch/{n}/gate/rel",
                     # Bus sends 1..16
                     *[f"/ch/{n}/send/{b}/lvl" for b in range(1, 17)],
                     *[f"/ch/{n}/send/{b}/on"  for b in range(1, 17)],
+                    *[f"/ch/{n}/send/{b}/pan" for b in range(1, 17)],
+                    # Main sends
+                    *[f"/ch/{n}/main/{m}/on"  for m in range(1, 5)],
+                    *[f"/ch/{n}/main/{m}/lvl" for m in range(1, 5)],
+                    # Inserts
+                    f"/ch/{n}/preins/on", f"/ch/{n}/preins/ins",
+                    f"/ch/{n}/postins/on", f"/ch/{n}/postins/ins",
                 ]
 
     # Aux inputs 1..8
     for n in range(1, QUERY_AUX + 1):
         queries += [f"/aux/{n}/name", f"/aux/{n}/fdr", f"/aux/{n}/mute",
                     f"/aux/{n}/pan",  f"/aux/{n}/$solo",
+                    f"/aux/{n}/icon", f"/aux/{n}/col",
+                    f"/aux/{n}/gain", f"/aux/{n}/trim",
                     f"/aux/{n}/eq/on",
                     f"/aux/{n}/eq/1g", f"/aux/{n}/eq/1f", f"/aux/{n}/eq/1q",
                     f"/aux/{n}/eq/2g", f"/aux/{n}/eq/2f", f"/aux/{n}/eq/2q",
                     f"/aux/{n}/eq/3g", f"/aux/{n}/eq/3f", f"/aux/{n}/eq/3q",
                     f"/aux/{n}/eq/4g", f"/aux/{n}/eq/4f", f"/aux/{n}/eq/4q",
                     f"/aux/{n}/dyn/on", f"/aux/{n}/dyn/thr", f"/aux/{n}/dyn/ratio",
-                    f"/aux/{n}/dyn/att", f"/aux/{n}/dyn/rel",
+                    f"/aux/{n}/dyn/att", f"/aux/{n}/dyn/hld", f"/aux/{n}/dyn/rel",
                     f"/aux/{n}/gate/on", f"/aux/{n}/gate/thr", f"/aux/{n}/gate/range",
-                    f"/aux/{n}/gate/att", f"/aux/{n}/gate/rel",
+                    f"/aux/{n}/gate/att", f"/aux/{n}/gate/hld", f"/aux/{n}/gate/rel",
                     *[f"/aux/{n}/send/{b}/lvl" for b in range(1, 17)],
                     *[f"/aux/{n}/send/{b}/on"  for b in range(1, 17)],
+                    f"/aux/{n}/preins/on", f"/aux/{n}/preins/ins",
                 ]
 
     # Mix buses 1..16

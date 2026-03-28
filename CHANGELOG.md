@@ -5,6 +5,97 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.0] — 2026-03-27
+
+### Overview
+Full bidirectional state synchronisation between the Wing console and the
+web app, matching the behaviour of Wing Edit: physical changes on the console
+are immediately reflected in the app, and changes made in the app are
+immediately applied to the console.
+
+### Added
+
+#### Full Wing → App Push Coverage
+- **New OSC dispatcher handlers** registered for every parameter that was
+  previously query-only (GET but no live push handler):
+  - `phantom` — +48V phantom power state
+  - `inv` / `invert` — signal polarity invert
+  - `hpf/on` + `hpf/f` — lo-cut filter on/off and frequency
+  - `lpf/on` + `lpf/f` — hi-cut filter on/off and frequency
+  - `dly/on` + `dly/time` — delay on/off and time value
+  - `gain` — preamp gain level
+  - `trim` — trim level
+  - `icon` — channel icon index
+  - `col` — channel colour index
+  - `preins/on` + `preins/ins` — Insert 1 enable and FX slot assignment
+  - `postins/on` + `postins/ins` — Insert 2 enable and FX slot assignment
+  - Aux equivalents for gain, trim, icon, col, and preins
+
+  Any physical change to these parameters on the Wing console now immediately
+  updates `app_state.mixer` and is broadcast to all connected browsers.
+
+#### New Frontend WebSocket Message Types
+- `input_options` — carries `{strip, ch, key, value}` for any input options
+  change; applied to local state and re-renders the channel settings INPUT
+  section if it is currently open for the affected channel
+- `icon` — updates `iconId` on the affected strip; refreshes the channel
+  settings nav rail thumbnail if open
+- `color` — updates `colorIdx` and immediately updates the color bar on
+  the strip DOM element
+- `insert` — updates `ins1` / `ins2` objects; re-renders the Insert section
+  in channel settings if currently open for the affected channel
+
+#### Expanded Bulk State Query
+- Added to the startup GET query for all 40 channels and 8 aux strips:
+  `phantom`, `inv`, `hpf/on`, `hpf/f`, `lpf/on`, `lpf/f`, `dly/on`,
+  `dly/time`, `icon`, `col`, `gain`, `trim`, `gate/hld`, `dyn/hld`,
+  `preins/on`, `preins/ins`, `postins/on`, `postins/ins`, all 4 main
+  sends (`main/1-4/on` + `main/1-4/lvl`), and bus send pan values
+
+#### Expanded Snapshot Application
+- Browser `snapshot` handler now applies all new fields from the Wing state
+  on connect: `phantom`, `invert`, `locut`, `hicut`, `tilt`, `delay`,
+  `gain`, `trim`, `locut_freq`, `hicut_freq`, `delay_time`, `iconId`,
+  `colorIdx`, `ins1`, `ins2`, `eq`, `dyn`, `gate`, `sends`, `mainSends`
+
+### Fixed
+
+#### Meter Engine — Subscription Split into Two TCP Writes
+- The Wing binary meter subscription packet was being sent as a single
+  combined TCP write (port declaration + report ID + collection). The
+  Wing V3.1.0 protocol docs show these as two separate writes. Splitting
+  them with a 50 ms gap between the port declaration and the collection
+  write resolves the issue where Wing was not sending any UDP meter data
+  back to the app.
+
+#### Meter Parser — Correct DCA Word Count
+- DCA strips have 4 words (8 bytes) per strip as specified in Table 5 of
+  the V3.1.0 docs (pre-fader L/R + post-fader L/R only — no gate/dyn
+  words). The parser was using 16 bytes for all strips including DCA,
+  misaligning the offset for everything following the DCA section in the
+  packet. Fixed with `METER_WORDS_PER_STRIP` dict and a running byte
+  offset instead of a flat stride.
+
+#### Meters View — All Strip Types
+- The Meters nav view was only showing the 40 channel strips. Now renders
+  all five metered strip types in labelled sections with section-specific
+  heights and accent colours: CH (orange), AUX (blue), BUS (cyan),
+  MAIN (red), MTX (green).
+
+#### Right Channel Meter Smoothing
+- The right channel VU bar was being updated directly from `applyMeterValues`
+  bypassing the attack/release smoothing loop. Both channels now go through
+  the same `animateMeters` interpolation (`ch.meter[1]` for right channel).
+
+#### Bulk Query Flooding
+- `bulk_query_wing()` was called on every browser WebSocket connect,
+  sending ~3,200+ OSC queries to the Wing every time a browser tab was
+  opened or refreshed. It now only fires when `app_state.mixer["channels"]`
+  is empty — i.e. once when Wing first connects — avoiding unnecessary
+  UDP floods that could cause the Wing OSC server to become unresponsive.
+
+---
+
 ## [2.2.2] — 2026-03-27
 
 ### Fixed

@@ -166,7 +166,21 @@ function handleServerMessage(msg) {
         if (d.solo       !== undefined) arr[i].solo       = d.solo;
         if (d.gateActive !== undefined) arr[i].gateActive = d.gateActive;
         if (d.dynActive  !== undefined) arr[i].dynActive  = d.dynActive;
-        // Seed meter as initial fallback (overwritten by real Wing binary meter data)
+        // Input options
+        const boolKeys = ['phantom','invert','locut','hicut','tilt','delay'];
+        boolKeys.forEach(k => { if (d[k] !== undefined) arr[i][k] = d[k]; });
+        const numKeys  = ['gain','trim','locut_freq','hicut_freq','delay_time'];
+        numKeys.forEach(k => { if (d[k] !== undefined) arr[i][k] = d[k]; });
+        // Icon, color, inserts, EQ, dynamics, gate, sends
+        if (d.iconId    !== undefined) arr[i].iconId    = d.iconId;
+        if (d.colorIdx  !== undefined) arr[i].colorIdx  = d.colorIdx;
+        if (d.ins1      !== undefined) arr[i].ins1      = d.ins1;
+        if (d.ins2      !== undefined) arr[i].ins2      = d.ins2;
+        if (d.eq        !== undefined) arr[i].eq        = d.eq;
+        if (d.dyn       !== undefined) arr[i].dyn       = d.dyn;
+        if (d.gate      !== undefined) arr[i].gate      = d.gate;
+        if (d.sends     !== undefined) arr[i].sends     = d.sends;
+        if (d.mainSends !== undefined) arr[i].mainSends = d.mainSends;
       });
     });
     // Re-render current layer to reflect new values
@@ -221,6 +235,66 @@ function handleServerMessage(msg) {
   } else if (type === 'wing_status') {
     // Auto-connection status from backend probe loop
     applyWingStatus(msg.connected, msg.wing_ip, msg.wing_port);
+
+  } else if (type === 'input_options') {
+    // Physical Wing change to gain, trim, phantom, locut, hicut, delay, invert
+    const smap = {ch:'channels', aux:'aux'};
+    const arrKey = smap[msg.strip];
+    const i = parseInt(msg.ch) - 1;
+    if (arrKey && i >= 0 && state[arrKey]?.[i]) {
+      state[arrKey][i][msg.key] = msg.value;
+      // If channel settings panel is open for this strip, refresh input section
+      if (typeof _csSection !== 'undefined' && _csSection === 'gain'
+          && _csStripType === msg.strip && _csId === parseInt(msg.ch)) {
+        const el = document.getElementById('chSettingsContent');
+        if (el) _csShowSection('gain');
+      }
+      // Refresh the nav rail thumb if ch-settings is open for this strip
+      if (typeof _csStripType !== 'undefined'
+          && _csStripType === msg.strip && _csId === parseInt(msg.ch)) {
+        _csRenderNavRail();
+      }
+    }
+
+  } else if (type === 'icon') {
+    const smap = {ch:'channels', aux:'aux'};
+    const arrKey = smap[msg.strip];
+    const i = parseInt(msg.ch) - 1;
+    if (arrKey && i >= 0 && state[arrKey]?.[i]) {
+      state[arrKey][i].iconId = msg.value;
+      if (typeof _csStripType !== 'undefined'
+          && _csStripType === msg.strip && _csId === parseInt(msg.ch)) {
+        _csRenderNavRail();
+      }
+    }
+
+  } else if (type === 'color') {
+    const smap = {ch:'channels', aux:'aux'};
+    const arrKey = smap[msg.strip];
+    const i = parseInt(msg.ch) - 1;
+    if (arrKey && i >= 0 && state[arrKey]?.[i]) {
+      state[arrKey][i].colorIdx = msg.value;
+      // Update the color bar on the strip itself
+      const bar = document.querySelector(`#strip-${msg.strip}-${msg.ch} .ch-color-bar`);
+      if (bar && typeof CS_COLORS !== 'undefined') bar.style.background = CS_COLORS[msg.value % CS_COLORS.length] || '#e8820a';
+    }
+
+  } else if (type === 'insert') {
+    const smap = {ch:'channels', aux:'aux'};
+    const arrKey = smap[msg.strip];
+    const i = parseInt(msg.ch) - 1;
+    if (arrKey && i >= 0 && state[arrKey]?.[i]) {
+      const slot = `ins${msg.slot}`;
+      state[arrKey][i][slot] = state[arrKey][i][slot] || {};
+      state[arrKey][i][slot][msg.key] = msg.value;
+      if (typeof _csSection !== 'undefined'
+          && (_csSection === `insert${msg.slot}`)
+          && _csStripType === msg.strip && _csId === parseInt(msg.ch)) {
+        const el = document.getElementById('chSettingsContent');
+        if (el) _csShowSection(_csSection);
+      }
+    }
+
   } else if (type === 'main_fader') {
     const fill   = document.getElementById('fader-fill-master');
     const handle = document.getElementById('fader-handle-master');

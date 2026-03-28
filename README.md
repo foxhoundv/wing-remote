@@ -1,4 +1,4 @@
-# WING Remote v2.2.2
+# WING Remote v2.3.0
 
 A self-hosted web application for remotely controlling a **Behringer Wing** digital
 mixer and recording multitrack audio — all from your browser, running in Docker.
@@ -15,7 +15,7 @@ mixer and recording multitrack audio — all from your browser, running in Docke
 | 🎚 | **Full Mixer Control** | All 40 channels, 8 aux, 16 buses, 4 mains, 8 matrix, 16 DCA |
 | 📊 | **Real Hardware VU Meters** | Live levels via Wing binary TCP protocol (port 2222, Channel 3) |
 | 🎛 | **Channel Settings** | Full per-channel editor: EQ, Dynamics, Gate, Input, Inserts, Bus/Main Sends |
-| 🔄 | **Bidirectional Sync** | Wing→browser push via `/*S` subscription; bulk query on connect |
+| 🔄 | **Bidirectional Sync** | Full two-way sync: Wing→app via `/*S` push + bulk query on connect; app→Wing via OSC |
 | 💡 | **Gate / Dyn LEDs** | Per-strip G and D indicators lit from hardware meter gate_key / dyn_key |
 | 🎨 | **Three-Theme Mode** | Dark · Mid Grey · Light — composite icon cycles through all three; preference persisted |
 | ⚙ | **Setup Wizard** | In-app OSC test, audio detection, live IP change — no restart required |
@@ -133,6 +133,33 @@ circles sit at each vertex.
 - **PAN LNK** — link send pan to channel pan
 
 ---
+
+## Bidirectional State Synchronisation
+
+WING Remote works exactly like Wing Edit — changes flow in both directions:
+
+**Wing console → App (real-time push)**
+The app subscribes to `/*S` on connection and renews every 8 seconds.
+Wing pushes every parameter change as a single-value OSC event. The backend
+OSC dispatcher routes each push to the correct handler which updates
+`app_state.mixer` and broadcasts a typed WebSocket message to all connected
+browsers. Parameters covered: fader, mute, pan, solo, name, EQ (all bands),
+dynamics (all params), gate (all params), input options (phantom, invert,
+lo-cut, hi-cut, delay, gain, trim), icon, colour, inserts, bus sends,
+and main sends.
+
+**App → Wing console (immediate OSC SET)**
+Every fader drag, mute tap, pan move, or parameter change in the browser
+sends an OSC SET message directly to the Wing via UDP. The Wing then
+echoes the change back via `/*S`, which keeps all other connected clients
+(browsers, Wing Edit, hardware surface) in sync automatically.
+
+**Startup bulk query**
+On first Wing connection the backend sends GET requests for every parameter
+across all 40 channels, 8 aux, 16 buses, 4 mains, 8 matrix, and 16 DCAs —
+roughly 3,500 queries sent in batches of 10 with 20 ms gaps to avoid
+flooding. Replies arrive via the same OSC dispatcher and populate the full
+mixer state before the first browser client connects.
 
 ## Wing OSC Protocol (V3.1.0)
 
