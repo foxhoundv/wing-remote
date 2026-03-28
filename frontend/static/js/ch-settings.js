@@ -1,4 +1,4 @@
-// Wing Remote v2.3.9 — Channel Settings Panel (Option C: Card Rail + Dashboard)
+// Wing Remote v2.3.10 — Channel Settings Panel (Option C: Card Rail + Dashboard)
 // ═══════════════════════════════════════════════════════════════════════════
 // CHANNEL SETTINGS PANEL
 // ═══════════════════════════════════════════════════════════════════════════

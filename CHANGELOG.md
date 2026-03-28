@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.10] — 2026-03-28
+
+### Fixed
+
+- **NRP channel demultiplexer — root cause of missing fader updates** —
+  The Wing multiplexes 14 logical channels over a single TCP connection on
+  port 2222 using NRP (Native Remote Protocol) framing. Channel switches
+  are signalled by `0xDF 0xD<ChID>` in the byte stream:
+
+  - ChID 0 (`0xDF 0xD0`) = Control Engine
+  - ChID 1 (`0xDF 0xD1`) = Audio Engine ← fader moves, mutes, param changes
+  - ChID 3 (`0xDF 0xD3`) = Meter Data
+
+  The previous TCP parser ignored `0xDF` bytes entirely, meaning every
+  channel-switch prefix was treated as unknown data. The channel-select byte
+  that follows (e.g. `0xD1`) was then misread as a token, misaligning the
+  entire parse for that block. Fader moves from the Wing arrived as Audio
+  Engine (ChID 1) tokens but were silently dropped because the parser never
+  correctly identified them.
+
+  Replaced with a proper Python port of the NRP receive routine from the
+  V3.1.0 docs (`nrpc_data_rx` C pseudocode). The demultiplexer correctly
+  handles escape sequences (`0xDF 0xDE` = literal `0xDF`), tracks the active
+  channel, and routes only ChID 1 (Audio Engine) bytes to the token parser.
+  Channel switches and escaped bytes are handled per spec. NRP state
+  (`_nrp_escf`, `_nrp_ch_rx`) is reset on every TCP reconnect.
+
+  Verified against all three doc examples and the captured hex dump:
+  `DF D1 D7 CB A1 42 33 D5 C0 F4 10 00` → hash `0xcba14233` = `−7.63 dB` ✓
+
+---
+
 ## [2.3.9] — 2026-03-27
 
 ### Fixed

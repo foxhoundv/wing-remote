@@ -1,5 +1,5 @@
 """
-WING Remote v2.3.9 - FastAPI Backend
+WING Remote v2.3.10 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 
@@ -1961,81 +1961,132 @@ def _parse_meter_udp(data: bytes) -> dict:
 
 
 
-# ── Wing Binary TCP Push Event Parser ────────────────────────────────────────
-# When Wing sends parameter changes via the native binary TCP channel (port 2222),
-# they arrive as: 0xD7 <4-byte-hash> 0xD5/D6 <4-byte-float>  or
-#                 0xD7 <4-byte-hash> 0xD4 <4-byte-int>  etc.
-# These are interleaved with meter data on the same TCP stream.
-# We parse the hash, look it up against known Wing parameter hashes, and
-# broadcast the change to browsers exactly like the OSC /*S~ handler does.
+# ── Wing NRP Binary TCP Parser ───────────────────────────────────────────────
+#
+# The Wing multiplexes 14 logical channels over a single TCP connection on
+# port 2222. Channel switches are signalled with NRP framing:
+#   0xDF 0xD<ChID>  = switch active channel to ChID
+#   0xDF 0xDE       = escaped 0xDF literal (data, not a channel switch)
+#
+# Currently active channels per V3.1.0 docs:
+#   ChID 0 (channel #1) = Control Engine
+#   ChID 1 (channel #2) = Audio Engine  ← fader/mute/parameter push events
+#   ChID 3 (channel #4) = Meter Data    ← we subscribe here for UDP meters
+#
+# Wing pushes parameter changes (fader moves, mutes, etc.) on ChID 1.
+# These arrive interleaved with meter channel traffic on the same TCP stream.
+# We must demultiplex properly or every channel-switch byte misaligns the parser.
 
-# Build hash→path lookup by querying Wing on startup (populated at runtime)
-_hash_to_path: dict = {}   # {hash_int: "/ch/1/fdr"}
+NRP_ESCAPE       = 0xDF
+NRP_CH_BASE      = 0xD0
+NRP_NUM_CHANNELS = 14
+NRP_AUDIO_CH     = 1    # ChID 1 = Audio Engine (fader/param changes)
 
-async def _read_binary_tcp_changes(tcp_reader) -> None:
+# Per-TCP-connection NRP receive state (reset on reconnect)
+_nrp_escf:   bool = False
+_nrp_ch_rx:  int  = -1
+_nrp_buf:    bytearray = bytearray()   # accumulated audio-engine payload bytes
+
+
+def _nrp_reset() -> None:
+    """Reset NRP receive state on TCP reconnect."""
+    global _nrp_escf, _nrp_ch_rx, _nrp_buf
+    _nrp_escf  = False
+    _nrp_ch_rx = -1
+    _nrp_buf   = bytearray()
+
+
+def _nrp_feed(raw: bytes) -> bytearray:
     """
-    Read binary parameter push events from the Wing meter TCP stream.
-    Wing sends these interleaved with meter data whenever a parameter changes.
-    Packet format (from V3.1.0 docs and hex dump analysis):
-        0xD7 <4-byte big-endian hash>  = parameter identifier
-        0xD5 <4-byte big-endian f32>   = new float value
-        0xD6 <4-byte big-endian f32>   = new raw float (0..1)
-        0xD4 <4-byte big-endian i32>   = new integer value
-        0xD8                           = toggle
+    Feed raw TCP bytes through the NRP demultiplexer (direct Python port of
+    the C receive routine in V3.1.0 docs). Returns accumulated bytes for the
+    Audio Engine channel (ChID 1) ready to parse for parameter tokens.
     """
-    # Non-blocking drain: read whatever bytes are already buffered, don't wait.
-    # Using timeout=0 avoids adding latency to the meter loop on every iteration.
-    buf = bytearray()
-    try:
-        chunk = await asyncio.wait_for(tcp_reader.read(32768), timeout=0.0)  # Wing max UDP = 32KB
-        if chunk:
-            buf.extend(chunk)
-    except (asyncio.TimeoutError, Exception):
-        pass   # Nothing buffered right now — normal
+    global _nrp_escf, _nrp_ch_rx, _nrp_buf
 
+    audio_data = bytearray()
+
+    for db in raw:
+        if db == NRP_ESCAPE and not _nrp_escf:
+            _nrp_escf = True
+        else:
+            if _nrp_escf:
+                if db != NRP_ESCAPE:
+                    _nrp_escf = False
+                    if db == NRP_ESCAPE - 1:          # 0xDE → escaped 0xDF literal
+                        db = NRP_ESCAPE
+                    elif NRP_CH_BASE <= db < NRP_CH_BASE + NRP_NUM_CHANNELS:
+                        _nrp_ch_rx = db - NRP_CH_BASE  # channel switch
+                        continue                        # don't pass to data handler
+                    else:
+                        if _nrp_ch_rx == NRP_AUDIO_CH:
+                            audio_data.append(NRP_ESCAPE)
+                # if db == NRP_ESCAPE: escf stays True (double-escape = literal)
+
+            if _nrp_ch_rx == NRP_AUDIO_CH:
+                audio_data.append(db)
+
+    return audio_data
+
+
+def _parse_audio_engine_tokens(data: bytearray) -> None:
+    """
+    Parse Audio Engine (ChID 1) token stream for parameter change events.
+
+    Token format per V3.1.0 Table 2:
+        0xD7 <4-byte hash BE>              = node hash (parameter address)
+        followed by value token:
+        0xD5 <4-byte float32 BE>           = float (e.g. fader in dB)
+        0xD6 <4-byte raw float32 BE 0..1>  = raw float
+        0xD4 <4-byte int32 BE>             = integer
+        0xD3 <2-byte int16 BE>             = short integer
+        0xD8                               = toggle/click
+        0x00                               = false / 0
+        0x01                               = true  / 1
+        0x02..0x3F                         = small integer (value = byte)
+    """
+    import struct
     i = 0
-    while i < len(buf) - 5:
-        if buf[i] == 0xD7:
-            # Hash token — next 4 bytes are the parameter hash
-            param_hash = int.from_bytes(buf[i+1:i+5], 'big')
-            i += 5
-            if i >= len(buf):
+    while i < len(data):
+        b = data[i]
+
+        if b == 0xD7:
+            # Node hash — 4 bytes follow
+            if i + 4 >= len(data):
                 break
-            val_token = buf[i]
-            if val_token == 0xD5 and i + 4 < len(buf):
-                # float32 (typically dB values)
-                import struct
-                val = struct.unpack('>f', buf[i+1:i+5])[0]
-                path = _hash_to_path.get(param_hash)
-                if path:
-                    _dispatch_binary_change(path, val, 'float')
-                else:
-                    log.debug(f"[BIN] unknown hash 0x{param_hash:08x} float={val:.4f}")
+            param_hash = int.from_bytes(data[i+1:i+5], 'big')
+            i += 5
+            if i >= len(data):
+                break
+
+            vt = data[i]
+            if vt == 0xD5 and i + 4 < len(data):           # float32
+                val = struct.unpack('>f', data[i+1:i+5])[0]
+                _dispatch_audio_change(param_hash, float(val), 'float')
                 i += 5
-            elif val_token == 0xD6 and i + 4 < len(buf):
-                # raw float 0..1
-                import struct
-                val = struct.unpack('>f', buf[i+1:i+5])[0]
-                path = _hash_to_path.get(param_hash)
-                if path:
-                    _dispatch_binary_change(path, val, 'raw')
-                else:
-                    log.debug(f"[BIN] unknown hash 0x{param_hash:08x} raw={val:.4f}")
+            elif vt == 0xD6 and i + 4 < len(data):         # raw float 0..1
+                val = struct.unpack('>f', data[i+1:i+5])[0]
+                _dispatch_audio_change(param_hash, float(val), 'raw')
                 i += 5
-            elif val_token == 0xD4 and i + 4 < len(buf):
-                # int32
-                val = int.from_bytes(buf[i+1:i+5], 'big', signed=True)
-                path = _hash_to_path.get(param_hash)
-                if path:
-                    _dispatch_binary_change(path, val, 'int')
-                else:
-                    log.debug(f"[BIN] unknown hash 0x{param_hash:08x} int={val}")
+            elif vt == 0xD4 and i + 4 < len(data):         # int32
+                val = int.from_bytes(data[i+1:i+5], 'big', signed=True)
+                _dispatch_audio_change(param_hash, int(val), 'int')
                 i += 5
-            elif val_token == 0xD8:
-                # toggle
-                path = _hash_to_path.get(param_hash)
-                if path:
-                    log.debug(f"[BIN] toggle {path}")
+            elif vt == 0xD3 and i + 2 < len(data):         # int16
+                val = int.from_bytes(data[i+1:i+3], 'big', signed=True)
+                _dispatch_audio_change(param_hash, int(val), 'int')
+                i += 3
+            elif vt == 0xD8:                                # toggle
+                log.debug(f"[NRP] toggle hash=0x{param_hash:08x}")
+                i += 1
+            elif vt == 0x00:                                # false
+                _dispatch_audio_change(param_hash, 0, 'int')
+                i += 1
+            elif vt == 0x01:                                # true
+                _dispatch_audio_change(param_hash, 1, 'int')
+                i += 1
+            elif 0x02 <= vt <= 0x3F:                       # small int
+                _dispatch_audio_change(param_hash, int(vt), 'int')
                 i += 1
             else:
                 i += 1
@@ -2043,34 +2094,48 @@ async def _read_binary_tcp_changes(tcp_reader) -> None:
             i += 1
 
 
-def _dispatch_binary_change(path: str, val, val_type: str) -> None:
+async def _read_binary_tcp_changes(tcp_reader) -> None:
     """
-    Route a binary parameter change to the same OSC handlers that process
-    /*S push events, so the mixer state and browser clients stay in sync.
+    Non-blocking drain of the Wing meter TCP connection.
+    Passes raw bytes through the NRP demultiplexer to extract Audio Engine
+    (ChID 1) data, then parses parameter change tokens from that stream.
     """
     try:
-        parts = path.strip('/').split('/')
-        if not parts:
-            return
+        chunk = await asyncio.wait_for(
+            tcp_reader.read(32768), timeout=0.0   # Wing max = 32KB, non-blocking
+        )
+        if chunk:
+            audio_bytes = _nrp_feed(chunk)
+            if audio_bytes:
+                _parse_audio_engine_tokens(audio_bytes)
+    except asyncio.TimeoutError:
+        pass   # nothing buffered right now — normal
+    except Exception as e:
+        log.debug(f"[NRP] TCP read error: {e}")
 
-        # Convert value to args tuple matching what OSC handlers expect
-        # For binary pushes: single value, no string label prefix
-        if val_type == 'float' or val_type == 'raw':
-            args = (float(val),)
-        else:
-            args = (int(val),)
 
-        # Dispatch to the correct handler via the dispatcher
+def _dispatch_audio_change(param_hash: int, val, val_type: str) -> None:
+    """
+    Route an Audio Engine parameter change to the correct OSC handler.
+    Looks the hash up in _hash_to_path; if found, invokes the handler
+    exactly as the OSC /*S push path does so app_state.mixer stays in sync.
+    """
+    path = _hash_to_path.get(param_hash)
+    if not path:
+        log.debug(f"[NRP] unknown hash 0x{param_hash:08x} {val_type}={val}")
+        return
+    try:
+        args = (float(val),) if val_type in ('float', 'raw') else (int(val),)
         if app_state.osc_server:
             handlers = app_state.osc_server._dispatcher.handlers_for_address(path)
             for h in handlers:
                 try:
                     h.invoke(path, *args)
                 except Exception as e:
-                    log.debug(f"[BIN] handler error for {path}: {e}")
-        log.debug(f"[BIN] {path} = {val} ({val_type})")
+                    log.debug(f"[NRP] handler error {path}: {e}")
+        log.debug(f"[NRP] {path} = {val}")
     except Exception as e:
-        log.debug(f"[BIN] dispatch error {path}: {e}")
+        log.debug(f"[NRP] dispatch error {path}: {e}")
 
 
 async def meter_engine():
@@ -2120,6 +2185,7 @@ async def meter_engine():
             )
             log.info(f"Meter TCP connected → {WING_IP()}:{WING_BINARY_PORT}")
             backoff = 2.0   # reset backoff on success
+            _nrp_reset()    # clear NRP demux state for fresh connection
         except Exception as e:
             log.warning(f"Meter TCP connect failed ({WING_IP()}:{WING_BINARY_PORT}): {e}")
             udp_sock.close()
@@ -2172,11 +2238,8 @@ async def meter_engine():
                             METER_UDP_PORT,
                         )
 
-                # Read any binary parameter change events from TCP stream
-                try:
-                    await _read_binary_tcp_changes(tcp_reader)
-                except Exception:
-                    pass
+                # Drain Audio Engine (ChID 1) parameter push events from TCP stream
+                await _read_binary_tcp_changes(tcp_reader)
 
                 # Non-blocking UDP read
                 try:
