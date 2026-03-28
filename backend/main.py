@@ -1,5 +1,5 @@
 """
-WING Remote v2.3.7 - FastAPI Backend
+WING Remote v2.3.8 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 
@@ -124,10 +124,12 @@ SUBSCRIPTION_INTERVAL = 8.0
 # subscribed — if Wing Edit ran before us, Wing pushes to Wing Edit's port.
 # Building the string dynamically so it updates if LOCAL_OSC_PORT changes.
 def _wing_subscribe_cmd() -> str:
-    # Wing subscription uses /*S~ (tilde = OSC null padding, required).
-    # The port-redirect prefix /%PORT tells Wing exactly where to send
-    # push events, overriding any other client's subscription.
-    return f"/%{LOCAL_OSC_PORT}/*S~"
+    # Wing subscription command with port-redirect prefix.
+    # The doc uses ~ to denote null bytes () in printed examples — the
+    # tilde is NOT a literal character. pythonosc handles null-termination
+    # and 4-byte alignment automatically; the address string has no tilde.
+    # "/%PORT/*S" → pythonosc encodes as /%2224/*S\x00\x00\x00 (12 bytes, valid OSC).
+    return f"/%{LOCAL_OSC_PORT}/*S"
 
 WING_SUBSCRIBE     = "/*S"   # fallback — overridden by _wing_subscribe_cmd()
 WING_BINARY_PORT   = 2222
@@ -1232,7 +1234,7 @@ async def websocket_endpoint(websocket: WebSocket):
         "wing_port": WING_OSC_PORT(),
     }))
     # New browsers receive the cached snapshot above — no re-query needed.
-    # app_state.mixer stays current via /*S~ push events and the one-time
+    # app_state.mixer stays current via /*S push events and the one-time
     # bulk query that runs when Wing first connects. Only Wing reconnects
     # (detected by wing_probe_loop) trigger a fresh bulk query.
     try:
@@ -2044,7 +2046,7 @@ async def _read_binary_tcp_changes(tcp_reader) -> None:
 def _dispatch_binary_change(path: str, val, val_type: str) -> None:
     """
     Route a binary parameter change to the same OSC handlers that process
-    /*S~ push events, so the mixer state and browser clients stay in sync.
+    /*S push events, so the mixer state and browser clients stay in sync.
     """
     try:
         parts = path.strip('/').split('/')

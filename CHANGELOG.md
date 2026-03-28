@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.8] — 2026-03-27
+
+### Fixed
+
+- **Subscription command contained a literal tilde instead of a null byte**
+  — the Wing protocol documentation uses `~` to represent `\0` (null byte)
+  in printed examples, e.g. `/*S~` means the OSC string `/*S\0`. This is a
+  documentation convention, not a literal character. OSC requires every string
+  to be null-terminated and padded to a multiple of 4 bytes — pythonosc
+  handles this automatically when the address is passed without a tilde.
+
+  Our subscription command was `/%2224/*S~` (11 chars + null + 1 pad = 12
+  bytes), which sent ASCII `0x7E` (tilde) as the last address character,
+  making the Wing receive an unrecognised command. The fix is `/%2224/*S`
+  (9 chars + null + 2 pads = 12 bytes), which pythonosc encodes correctly
+  as `2f25323232342f2a53000000` — a valid, Wing-recognised OSC address.
+
+---
+
 ## [2.3.7] — 2026-03-27
 
 ### Changed
