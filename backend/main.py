@@ -1,5 +1,5 @@
 """
-WING Remote v2.3.0 - FastAPI Backend
+WING Remote v2.3.3 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 
@@ -119,7 +119,14 @@ RECORDINGS_DIR = Path(os.getenv("RECORDINGS_DIR", "/recordings"))
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 METER_RENEW_SEC    = 4.0
 SUBSCRIPTION_INTERVAL = 8.0
-WING_SUBSCRIBE     = "/*S"
+# Use /%PORT/*S to tell Wing exactly which port to push events to.
+# Without the port redirect, Wing pushes to whatever source port last
+# subscribed — if Wing Edit ran before us, Wing pushes to Wing Edit's port.
+# Building the string dynamically so it updates if LOCAL_OSC_PORT changes.
+def _wing_subscribe_cmd() -> str:
+    return f"/%{LOCAL_OSC_PORT}/*S"
+
+WING_SUBSCRIBE     = "/*S"   # fallback — overridden by _wing_subscribe_cmd()
 WING_BINARY_PORT   = 2222
 
 # Mutable Wing target — updated live by setup_apply without needing restart
@@ -180,7 +187,7 @@ class WingOSCTransport:
                     msg = OscMessage(data)
                     handlers = self_._ref._dispatcher.handlers_for_address(msg.address)
                     for h in handlers:
-                        h.invoke(msg.address, msg.params)
+                        h.invoke(msg.address, *msg.params)
                 except Exception as e:
                     log.debug(f"[OSC recv] parse error from {addr}: {e}")
             def error_received(self_, exc):
@@ -333,8 +340,9 @@ async def subscription_keepalive():
     while True:
         if app_state.wing_client:
             try:
-                app_state.wing_client.send_message(WING_SUBSCRIBE, [])
-                log.debug("[OSC] Subscription keepalive /*S sent")
+                cmd = _wing_subscribe_cmd()
+                app_state.wing_client.send_message(cmd, [])
+                log.debug(f"[OSC] Subscription keepalive sent: {cmd}")
             except Exception as e:
                 log.warning(f"Subscription keepalive failed: {e}")
         await asyncio.sleep(SUBSCRIPTION_INTERVAL)
@@ -473,23 +481,34 @@ def parse_wing_int(args) -> int:
 
 def parse_wing_pan(args) -> float:
     """
-    Wing pan is -100..100 as a float.
-    Returns value normalised to -1.0..1.0 for the UI.
+    Parse Wing pan value and return normalised -1.0..1.0 for the UI.
+
+    Wing GET reply (,sff): args = (ascii_str, raw_0_to_1, actual_value)
+      - arg0 is a string (e.g. '0')
+      - arg1 is normalised 0..1 (0.5 = centre) — NOT the pan value
+      - arg2 IS the pan value in Wing's -100..100 range
+      → use args[2]
+
+    Wing /*S push (,f): args = (actual_value,)
+      - arg0 is the pan value in -100..100
+      → use args[0]
     """
     if not args:
         return 0.0
-    raw = 0.0
-    if isinstance(args[0], str) and len(args) >= 2:
+    val = 0.0
+    if isinstance(args[0], str):
+        # GET reply: use args[2] — the actual -100..100 value
         try:
-            raw = float(args[1])
+            val = float(args[2]) if len(args) >= 3 else 0.0
         except Exception:
-            pass
+            val = 0.0
     else:
+        # /*S push: arg0 is already the -100..100 value
         try:
-            raw = float(args[0])
+            val = float(args[0])
         except Exception:
-            pass
-    return max(-1.0, min(1.0, raw / 100.0))
+            val = 0.0
+    return max(-1.0, min(1.0, val / 100.0))
 
 
 # ── OSC Server (receive FROM Wing) ────────────────────────────────────────────
@@ -1153,10 +1172,10 @@ async def websocket_endpoint(websocket: WebSocket):
         "wing_ip": WING_IP(),
         "wing_port": WING_OSC_PORT(),
     }))
-    # Don't flood the Wing with bulk queries on every browser open.
-    # The probe loop already triggers bulk_query_wing() when Wing connects.
-    # We only re-query if the browser is connecting and mixer state is empty.
-    if not any(app_state.mixer["channels"].values()):
+    # Trigger a fresh bulk query on each new browser connect IF Wing is
+    # connected. This ensures a just-opened tab always gets current state.
+    # Batched at 10 queries / 20ms so the Wing is not flooded.
+    if app_state.wing_connected:
         asyncio.create_task(bulk_query_wing())
     try:
         async for raw in websocket.iter_text():
@@ -1515,7 +1534,7 @@ async def setup_apply(payload: dict):
         if app_state.wing_client:
             app_state.wing_client.update_target(new_ip, new_port)
         # Send initial subscription to new endpoint
-        app_state.wing_client.send_message(WING_SUBSCRIBE, [])
+            app_state.wing_client.send_message(_wing_subscribe_cmd(), [])
         # Force probe loop to check connectivity right away
         app_state.wing_connected = False
         results["osc_client"] = {"success": True, "message": f"OSC client updated → {new_ip}:{new_port}"}

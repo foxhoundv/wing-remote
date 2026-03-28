@@ -7,6 +7,13 @@
 #   docker compose logs -f wing-remote # follow logs
 #   docker compose down                # stop and remove containers
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# WINDOWS NOTE:
+#   network_mode: host does NOT work on Windows Docker (Docker runs inside a
+#   WSL2/Hyper-V VM, so "host" binds to the VM's interface, not your PC's).
+#   We use bridge mode with explicit port mappings instead. All UDP ports that
+#   Wing sends packets TO must be listed here or they will be silently dropped.
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
@@ -18,26 +25,29 @@ services:
     restart: unless-stopped
 
     # ── Network ──────────────────────────────────────────────────────────────
-    # host mode gives the container direct UDP access for OSC (no NAT issues)
-    # and also makes /dev/snd devices visible without a devices: block.
-    # Wing OSC port is always 2223. LOCAL_OSC_PORT (default 2224) is the port
-    # this container listens on for Wing subscription push events.
-    network_mode: host
+    # Bridge mode with explicit port mapping — required on Windows.
+    # Port layout:
+    #   8000/tcp  — FastAPI web UI (browser connects here)
+    #   2224/udp  — OSC subscription push events (Wing → container)
+    #               Wing is told to send events to host:2224 via /%2224/*S
+    #   2222/udp  — Wing meter data (Wing → container, native binary protocol)
+    #   2223/udp  — Wing OSC server (container → Wing outbound; Wing replies
+    #               back to source port 2224, so this is outbound only)
+    ports:
+      - "8000:8000"          # Web UI
+      - "2224:2224/udp"      # OSC subscription event receiver
+      - "2222:2222/udp"      # Meter data receiver (native binary)
 
     # ── Audio device access ───────────────────────────────────────────────────
-    # privileged: true lets the entrypoint script detect /dev/snd at runtime
-    # and add the container user to the audio group if devices are present.
-    # This is safe here because the Docker socket is already mounted (which
-    # grants equivalent host access). Remove if you don't need audio recording.
     privileged: true
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     volumes:
-      - recordings:/recordings       # WAV recording storage (Docker-managed)
-      - snapshots:/snapshots         # Scene/snapshot files  (Docker-managed)
-      - ./.env:/app/.env             # Setup Wizard writes Wing IP, ports, etc.
-      - ./docker-compose.yml:/app/docker-compose.yml  # Readable by Setup Wizard
-      - /var/run/docker.sock:/var/run/docker.sock      # Enables auto-restart from UI
+      - recordings:/recordings
+      - snapshots:/snapshots
+      - ./.env:/app/.env
+      - ./docker-compose.yml:/app/docker-compose.yml
+      - /var/run/docker.sock:/var/run/docker.sock
 
     # ── Environment ──────────────────────────────────────────────────────────
     env_file: .env

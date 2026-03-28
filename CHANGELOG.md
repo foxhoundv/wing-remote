@@ -5,6 +5,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.3] — 2026-03-27
+
+### Fixed
+
+- **Wing push events never arrived — subscription port mismatch** — the Wing
+  OSC subscription command `/*S` tells Wing to push parameter change events
+  back to the sender's source port. However, Wing only honours one active
+  subscription at a time across the entire console. If Wing Edit or any
+  other OSC client had previously subscribed from a different port, Wing
+  continues pushing to that port and ignores our `/*S`. The fix uses the
+  Wing port-redirect prefix: `/%PORT/*S` (e.g. `/%2224/*S`), which
+  explicitly instructs Wing to send push events to a specific UDP port
+  regardless of what other clients have registered. This ensures our app
+  always receives live fader, mute, pan, name, EQ, and dynamics updates
+  from the Wing in real time, even when Wing Edit is also running.
+
+- **Pan values parsed incorrectly from GET replies** — Wing's GET reply for
+  pan uses tag format `,sff`: `arg0` is an ASCII string label, `arg1` is a
+  normalised 0–1 raw position (0.5 = centre), and `arg2` is the actual pan
+  value in Wing's −100..100 degree scale. `parse_wing_pan` was reading
+  `arg1` (0.5) and dividing by 100, yielding 0.005 instead of 0.0 for a
+  centred pan. Fixed to read `arg2` from GET replies (when `arg0` is a
+  string) and `arg0` directly from `/*S` push events (which send the
+  actual value as a single float).
+
+---
+
+## [2.3.2] — 2026-03-27
+
+### Fixed
+
+- **All Wing state ignored — root cause found and fixed** — every fader
+  position, mute state, pan, name, EQ value, gate, and dynamics parameter
+  received from the Wing (both GET replies and `/*S` subscription pushes)
+  was being silently discarded. Root cause: the OSC message dispatcher in
+  `WingOSCTransport.datagram_received` called
+  `h.invoke(msg.address, msg.params)`, passing the params list as a
+  **single argument**. Python-osc's `Handler.invoke` signature expects
+  `(address, *args)` — individual positional arguments. Every handler
+  therefore received `args = ([list_of_values],)` — a one-element tuple
+  containing the whole list — so `parse_wing_float(args)` saw
+  `args[0]` as a list (not a string or float) and returned `0.0` for
+  every fader, `False` for every mute, `""` for every name. The fix is
+  one character: `h.invoke(msg.address, *msg.params)` — unpacking the
+  params list so handlers receive the values as intended.
+
+- **Bulk query not firing on browser connect** — the guard condition
+  `if not any(app_state.mixer["channels"].values())` was always `False`
+  because `app_state.mixer["channels"]` is pre-populated with 40 default
+  channel dicts at init time. The condition was intended to detect "mixer
+  state is empty", but an empty dict is falsy and a dict with keys is
+  always truthy regardless of whether those keys hold real Wing values or
+  defaults. Changed to `if app_state.wing_connected:` so a fresh bulk
+  query is triggered on every new browser connect while the Wing is live,
+  ensuring a just-opened tab always shows the current console state.
+
+---
+
+## [2.3.1] — 2026-03-27
+
+### Fixed
+
+- **Fader handle position off by 7px** — the `.fader-handle` CSS rule used
+  `transform: translate(-50%, 50%)`, where the `50%` Y component shifts the
+  element downward by half its own height (7px, since the handle is 14px tall).
+  Combined with `bottom: calc(X% - 7px)`, the handle centre ended up at
+  `X% - 7px` instead of exactly `X%`, placing every handle 7px lower than the
+  corresponding Wing console position. Fixed by changing the transform to
+  `translateX(-50%)` (horizontal centring only). The `bottom: calc(X% - 7px)`
+  formula is unchanged and now correctly places the handle centre at `X%`.
+
+---
+
 ## [2.3.0] — 2026-03-27
 
 ### Overview

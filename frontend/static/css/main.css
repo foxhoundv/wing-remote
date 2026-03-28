@@ -417,7 +417,7 @@
   }
   .fader-handle {
     position: absolute; left: 50%;
-    transform: translate(-50%, 50%);
+    transform: translateX(-50%);
     width: 36px; height: 14px;
     background: linear-gradient(180deg, #4a4e5a 0%, #2a2d34 50%, #1e2128 100%);
     border: 1px solid var(--border-hi);
