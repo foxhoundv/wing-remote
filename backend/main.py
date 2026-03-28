@@ -1,5 +1,5 @@
 """
-WING Remote v2.3.8 - FastAPI Backend
+WING Remote v2.3.9 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 
@@ -1987,7 +1987,7 @@ async def _read_binary_tcp_changes(tcp_reader) -> None:
     # Using timeout=0 avoids adding latency to the meter loop on every iteration.
     buf = bytearray()
     try:
-        chunk = await asyncio.wait_for(tcp_reader.read(4096), timeout=0.0)
+        chunk = await asyncio.wait_for(tcp_reader.read(32768), timeout=0.0)  # Wing max UDP = 32KB
         if chunk:
             buf.extend(chunk)
     except (asyncio.TimeoutError, Exception):
@@ -2101,6 +2101,8 @@ async def meter_engine():
             udp_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
             udp_sock.bind(("0.0.0.0", METER_UDP_PORT))
             udp_sock.setblocking(False)
+            # Set OS receive buffer to 32KB — the Wing's maximum UDP packet size
+            udp_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_RCVBUF, 32768)
             log.info(f"Meter UDP listener bound on :{METER_UDP_PORT}")
         except Exception as e:
             log.warning(f"Meter UDP bind failed: {e}")
@@ -2178,7 +2180,7 @@ async def meter_engine():
 
                 # Non-blocking UDP read
                 try:
-                    data, addr = udp_sock.recvfrom(8192)
+                    data, addr = udp_sock.recvfrom(32768)  # Wing max UDP = 32KB
                     if data:
                         pkt_count += 1
                         last_pkt_time = now

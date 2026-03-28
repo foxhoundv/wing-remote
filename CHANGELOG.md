@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.9] — 2026-03-27
+
+### Fixed
+
+- **UDP and TCP read buffers increased to match Wing's 32KB maximum** —
+  the V3.1.0 doc states the maximum UDP packet size is 32,768 bytes (32KB).
+  Three receive buffer sizes were set below this limit:
+
+  - **Meter UDP `recvfrom`** — raised from `8192` to `32768`. The current
+    meter packet is ~1,348 bytes, so no data was being lost, but this future-
+    proofs against larger meter collections and matches the documented spec.
+
+  - **Meter UDP `SO_RCVBUF`** — the OS-level socket receive buffer is now
+    explicitly set to 32,768 bytes via `setsockopt(SOL_SOCKET, SO_RCVBUF,
+    32768)`. Without this, the OS may use a smaller default buffer and silently
+    drop oversized incoming packets before `recvfrom` can read them.
+
+  - **TCP binary change reader** — `tcp_reader.read(4096)` raised to
+    `tcp_reader.read(32768)`. Wing can push multiple parameter change tokens
+    in a single TCP segment; reading only 4KB per call could leave data in the
+    kernel buffer for an extra loop iteration, increasing latency.
+
+---
+
 ## [2.3.8] — 2026-03-27
 
 ### Fixed
