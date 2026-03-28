@@ -1,4 +1,4 @@
-// Wing Remote v2.3.3 — Views, View Builders, Theme Toggle
+// Wing Remote v2.3.7 — Views, View Builders, Theme Toggle
 // ── VIEW SWITCHER ───────────────────────────────────
 function setView(v) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -308,7 +308,7 @@ async function _loadUtilityStatus() {
     if (sysEl) {
       sysEl.innerHTML = `
         <div style="color:var(--text-muted);font-size:10px;font-weight:700">VERSION</div>
-        <div style="color:var(--text-primary);font-family:monospace;font-size:11px;">2.3.3</div>
+        <div style="color:var(--text-primary);font-family:monospace;font-size:11px;">2.3.7</div>
         <div style="color:var(--text-muted);font-size:10px;font-weight:700">RECORDING</div>
         <div style="color:var(--text-primary);font-family:monospace;font-size:11px;">${data.recording?'● ACTIVE':'IDLE'}</div>`;
     }

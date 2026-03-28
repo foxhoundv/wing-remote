@@ -5,6 +5,161 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.7] — 2026-03-27
+
+### Changed
+
+- **Bulk query fires only once — on Wing connect, not on every browser open**
+  — `bulk_query_wing()` now has exactly two trigger points:
+
+  1. **Startup** (`_delayed_bulk_query`) — runs 3 seconds after the container
+     starts, once the OSC server is ready, to populate `app_state.mixer` with
+     the Wing's initial state.
+  2. **Wing (re)connect** (`wing_probe_loop`) — fires once each time the probe
+     loop detects the Wing has become reachable after being unreachable,
+     ensuring state is refreshed if the Wing rebooted or was disconnected.
+
+  The previous behaviour sent ~3,500 OSC GET requests to the Wing on **every
+  new browser tab or page refresh**, which is unnecessary and can flood the
+  Wing's OSC server. `app_state.mixer` is kept current in real time by the
+  `/*S~` subscription push events and the binary TCP parameter change receiver,
+  so a new browser tab simply receives the cached snapshot already held in
+  memory — no Wing queries needed.
+
+---
+
+## [2.3.7] — 2026-03-27
+
+### Fixed
+
+- **8-second meter/fader delay** — `bulk_query_wing()` was sending ~5,500 OSC
+  GET requests (40 channels × ~110 params each + aux/bus/main/matrix) in batches
+  of 10 with a 20ms sleep between batches. Total blocking time: ~11 seconds of
+  `await asyncio.sleep()`. While the event loop technically processes other
+  coroutines during sleep, the Wing's OSC server was also being flooded with
+  5,500 UDP queries, causing it to queue replies for ~8–11 seconds before
+  processing live push events. Meters and fader moves appeared with an 8-second
+  lag as a result.
+
+  **Fix:** Split into two tiers:
+  - **Tier 1 (Essential)** — name, fader, mute, pan, solo, icon, color for all
+    strips (~240 queries, batches of 20, 5ms gaps → completes in ~0.3s). Runs
+    on every browser connect.
+  - **Tier 2 (Deep)** — EQ, dynamics, gate, sends, input options (~800 queries,
+    batches of 10, 20ms gaps → runs in background). Starts 1 second after the
+    essential query, so live updates are never blocked.
+
+- **Meter loop stalling 100ms per iteration** — `_read_binary_tcp_changes()`
+  called `asyncio.wait_for(tcp_reader.read(256), timeout=0.1)` which blocked
+  for 100ms waiting for TCP data that usually isn't there. With the meter loop
+  running at 25ms intervals, this caused every fourth frame to take 100ms
+  instead of 25ms, reducing effective meter rate to ~8fps and adding
+  unpredictable latency. Fixed to `timeout=0.0` (non-blocking poll) — if no
+  TCP data is buffered the call returns immediately.
+
+---
+
+## [2.3.6] — 2026-03-27
+
+### Fixed — Protocol compliance review against V3.1.0 spec
+
+- **Fader SET sends dB not raw 0–1** — the V3.1.0 doc is explicit:
+  `->W /ch/2/fdr ,f [-3.0000]` sets to −3 dB. The Wing's `,sff` GET reply
+  includes a raw 0–1 value at `arg1` as a convenience, but SET must use dB.
+  Our code was sending raw (e.g. `0.75`) which Wing interpreted as `+0.75 dB`,
+  placing every fader at the wrong position. Added `_wing_raw_to_db()` —
+  the inverse of `_wing_db_to_raw()` — and the fader SET path now converts
+  before transmitting.
+
+- **Input options OSC paths corrected** — all input option paths were wrong.
+  The Wing groups input settings under `/ch/N/in/set/` and filters under
+  `/ch/N/flt/`:
+
+  | Old (wrong) | Correct per V3.1.0 |
+  |---|---|
+  | `/ch/N/gain` | `/ch/N/in/set/$g` |
+  | `/ch/N/trim` | `/ch/N/in/set/trim` |
+  | `/ch/N/phantom` | `/ch/N/in/set/$vph` |
+  | `/ch/N/inv` | `/ch/N/in/set/inv` |
+  | `/ch/N/dly/on` | `/ch/N/in/set/dlyon` |
+  | `/ch/N/dly/time` | `/ch/N/in/set/dly` |
+  | `/ch/N/hpf/on` | `/ch/N/flt/lc` |
+  | `/ch/N/hpf/f` | `/ch/N/flt/lcf` |
+  | `/ch/N/lpf/on` | `/ch/N/flt/hc` |
+  | `/ch/N/lpf/f` | `/ch/N/flt/hcf` |
+  | `/ch/N/tilt` | `/ch/N/flt/tf` |
+
+  Corrected in both the bulk query list and the OSC dispatcher registrations
+  for channels and aux strips. All corresponding handlers updated to parse
+  GET replies using `args[2]` (the actual value field in `,sff` responses).
+
+- **Added missing aux input option handlers** — `handle_aux_phantom`,
+  `handle_aux_invert`, `handle_aux_hpf_on/freq`, `handle_aux_lpf_on/freq`
+  were registered in the dispatcher but not defined as functions. Added.
+
+- **Added `handle_ch_tilt_on`** — tilt filter enable handler was missing.
+
+---
+
+## [2.3.5] — 2026-03-27
+
+### Fixed
+
+- **`/*S~` subscription — missing tilde** — Wing's OSC subscription commands
+  require a trailing tilde (`~`) which is the OSC null-padding character.
+  The subscription was being sent as `/*S` instead of `/*S~`, which the Wing
+  was silently ignoring. Fixed to send `/%2224/*S~` (port-redirect + correct
+  command format). The diagnostic sniffer confirmed the Wing gave no response
+  to `/*S` — it now receives `/*S~` and will begin pushing single-value OSC
+  events to port 2224.
+
+### Added
+
+- **Binary TCP parameter change receiver** — hex dump analysis of a live
+  fader move revealed that the Wing *also* sends parameter changes on the
+  native binary TCP channel 2 (port 2222), interleaved with meter data.
+  These arrive as `0xD7 <hash> 0xD5/D6/D4 <value>` tokens — the Wing's
+  internal hash-addressed binary protocol. Added `_read_binary_tcp_changes()`
+  which reads and parses these packets from the meter TCP stream on every
+  loop iteration, and `_dispatch_binary_change()` which routes them through
+  the same OSC dispatcher handlers so fader, mute, pan, and all other
+  parameter updates update `app_state.mixer` and broadcast to browsers
+  via WebSocket — regardless of whether the `/*S~` OSC subscription is
+  also working. This provides a second, independent path for receiving
+  real-time Wing state changes.
+
+---
+
+## [2.3.4] — 2026-03-27
+
+### Changed
+
+- **`docker-compose.yml` revised for Windows bridge networking** — switched
+  from `network_mode: host` (Linux-only) to explicit bridge port mappings
+  so the container works on Windows Docker Desktop and macOS. Port layout:
+
+  | Port | Protocol | Direction | Purpose |
+  |---|---|---|---|
+  | 8000 | TCP | inbound | Web UI |
+  | 2224 | UDP | inbound | OSC push events from Wing (matches `LOCAL_OSC_PORT`) |
+  | 2225 | UDP | inbound | Binary meter data from Wing (matches `METER_UDP_PORT`) |
+  | 2222 | TCP | outbound | Container → Wing meter subscription (no mapping needed) |
+  | 2223 | UDP | outbound | Container → Wing OSC commands (no mapping needed) |
+
+### Fixed in docker-compose.yml
+
+- Port 2222 was listed as `udp` in the uploaded replacement file — corrected
+  to `tcp`. The Wing binary meter interface uses a **TCP** connection (the
+  container opens a persistent TCP stream to Wing port 2222 to subscribe to
+  meter data). Using the wrong protocol would silently drop the connection.
+
+- Port 2225/udp (meter UDP receiver) was missing from the uploaded file.
+  Wing sends binary meter packets to this port after the TCP subscription
+  is established. Without it mapped, all meter data is silently dropped
+  by the Docker bridge NAT layer.
+
+---
+
 ## [2.3.3] — 2026-03-27
 
 ### Fixed

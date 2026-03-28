@@ -1,5 +1,5 @@
 """
-WING Remote v2.3.3 - FastAPI Backend
+WING Remote v2.3.7 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 
@@ -124,7 +124,10 @@ SUBSCRIPTION_INTERVAL = 8.0
 # subscribed — if Wing Edit ran before us, Wing pushes to Wing Edit's port.
 # Building the string dynamically so it updates if LOCAL_OSC_PORT changes.
 def _wing_subscribe_cmd() -> str:
-    return f"/%{LOCAL_OSC_PORT}/*S"
+    # Wing subscription uses /*S~ (tilde = OSC null padding, required).
+    # The port-redirect prefix /%PORT tells Wing exactly where to send
+    # push events, overriding any other client's subscription.
+    return f"/%{LOCAL_OSC_PORT}/*S~"
 
 WING_SUBSCRIBE     = "/*S"   # fallback — overridden by _wing_subscribe_cmd()
 WING_BINARY_PORT   = 2222
@@ -181,10 +184,14 @@ class WingOSCTransport:
                 self_._ref = transport_ref
             def connection_made(self_, transport):
                 self_._ref._transport = transport
+            _first_msg_logged = [False]
             def datagram_received(self_, data, addr):
                 try:
                     from pythonosc.osc_message import OscMessage
                     msg = OscMessage(data)
+                    if not _first_msg_logged[0]:
+                        log.info(f"[OSC recv] first message: {msg.address} from {addr}")
+                        _first_msg_logged[0] = True
                     handlers = self_._ref._dispatcher.handlers_for_address(msg.address)
                     for h in handlers:
                         h.invoke(msg.address, *msg.params)
@@ -342,7 +349,7 @@ async def subscription_keepalive():
             try:
                 cmd = _wing_subscribe_cmd()
                 app_state.wing_client.send_message(cmd, [])
-                log.debug(f"[OSC] Subscription keepalive sent: {cmd}")
+                log.info(f"[OSC] Subscription keepalive: {cmd}")
             except Exception as e:
                 log.warning(f"Subscription keepalive failed: {e}")
         await asyncio.sleep(SUBSCRIPTION_INTERVAL)
@@ -391,7 +398,7 @@ async def wing_probe_loop():
             await broadcast(status_msg)
             if connected:
                 log.info(f"Wing connected at {WING_IP()}:{WING_OSC_PORT()}")
-                # Trigger bulk query now that Wing is reachable
+                # Wing just (re)connected — do the one-time full state query
                 asyncio.create_task(bulk_query_wing())
             else:
                 log.warning(f"Wing not reachable at {WING_IP()}:{WING_OSC_PORT()}")
@@ -426,6 +433,31 @@ def _wing_db_to_raw(db: float) -> float:
         return 0.85 + (db - 4.0) * (0.9233 - 0.85) / 6.0
     else:
         return min(1.0, 0.9233 + (db - 10.0) * 0.01)
+
+
+def _wing_raw_to_db(raw: float) -> float:
+    """
+    Convert raw 0.0–1.0 fader position to Wing dB value for OSC SET commands.
+
+    V3.1.0 docs confirm Wing expects dB on SET:
+      ->W /ch/2/fdr ,f [-3.0000]   ← dB, not raw
+
+    Inverse piecewise from _wing_db_to_raw() data points:
+      raw < 0.675  → dB = (raw/0.675 - 1) * 57 - 3   (maps 0→-60, 0.675→-3)
+      0.675..0.85  → dB = (raw - 0.75) / 0.025        (0.75→0, 0.85→+4)
+      0.85..0.9233 → dB = 4 + (raw - 0.85) / 0.01222  (0.85→+4, 0.9233→+10)
+      raw > 0.9233 → dB = 10 + (raw - 0.9233) / 0.01  (capped at +10 for safety)
+    """
+    if raw <= 0.0:
+        return -144.0
+    elif raw < 0.675:
+        return (raw / 0.675 - 1.0) * 57.0 - 3.0
+    elif raw <= 0.85:
+        return (raw - 0.75) / 0.025
+    elif raw <= 0.9233:
+        return 4.0 + (raw - 0.85) / ((0.9233 - 0.85) / 6.0)
+    else:
+        return min(10.0, 10.0 + (raw - 0.9233) / 0.01)
 
 
 def parse_wing_float(args) -> float:
@@ -584,25 +616,33 @@ def build_dispatcher() -> Dispatcher:
     d.map("/ch/*/send/*/*",  handle_ch_send)
     d.map("/aux/*/send/*/*", handle_aux_send)
 
-    # Input options (phantom power, invert, HPF/LPF, delay)
-    d.map("/ch/*/gain",    handle_ch_gain)
-    d.map("/ch/*/trim",    handle_ch_trim)
-    d.map("/ch/*/phantom", handle_ch_phantom)
-    d.map("/ch/*/inv",     handle_ch_invert)
-    d.map("/ch/*/hpf/on",  handle_ch_hpf_on)
-    d.map("/ch/*/hpf/f",   handle_ch_hpf_freq)
-    d.map("/ch/*/lpf/on",  handle_ch_lpf_on)
-    d.map("/ch/*/lpf/f",   handle_ch_lpf_freq)
-    d.map("/ch/*/dly/on",  handle_ch_dly_on)
-    d.map("/ch/*/dly/time",handle_ch_dly_time)
-    d.map("/ch/*/icon",    handle_ch_icon)
-    d.map("/ch/*/col",     handle_ch_col)
+    # Input options — correct paths per V3.1.0 doc
+    d.map("/ch/*/in/set/$g",    handle_ch_gain)
+    d.map("/ch/*/in/set/trim",  handle_ch_trim)
+    d.map("/ch/*/in/set/$vph",  handle_ch_phantom)
+    d.map("/ch/*/in/set/inv",   handle_ch_invert)
+    d.map("/ch/*/in/set/dlyon", handle_ch_dly_on)
+    d.map("/ch/*/in/set/dly",   handle_ch_dly_time)
+    # Filter paths
+    d.map("/ch/*/flt/lc",       handle_ch_hpf_on)
+    d.map("/ch/*/flt/lcf",      handle_ch_hpf_freq)
+    d.map("/ch/*/flt/hc",       handle_ch_lpf_on)
+    d.map("/ch/*/flt/hcf",      handle_ch_lpf_freq)
+    d.map("/ch/*/flt/tf",       handle_ch_tilt_on)
+    d.map("/ch/*/icon",         handle_ch_icon)
+    d.map("/ch/*/col",          handle_ch_col)
 
-    # Aux input options
-    d.map("/aux/*/gain",    handle_aux_gain)
-    d.map("/aux/*/trim",    handle_aux_trim)
-    d.map("/aux/*/icon",    handle_aux_icon)
-    d.map("/aux/*/col",     handle_aux_col)
+    # Aux input options — correct paths per V3.1.0 doc
+    d.map("/aux/*/in/set/$g",    handle_aux_gain)
+    d.map("/aux/*/in/set/trim",  handle_aux_trim)
+    d.map("/aux/*/in/set/$vph",  handle_aux_phantom)
+    d.map("/aux/*/in/set/inv",   handle_aux_invert)
+    d.map("/aux/*/flt/lc",       handle_aux_hpf_on)
+    d.map("/aux/*/flt/lcf",      handle_aux_hpf_freq)
+    d.map("/aux/*/flt/hc",       handle_aux_lpf_on)
+    d.map("/aux/*/flt/hcf",      handle_aux_lpf_freq)
+    d.map("/aux/*/icon",         handle_aux_icon)
+    d.map("/aux/*/col",          handle_aux_col)
 
     # Insert states (channels)
     d.map("/ch/*/preins/on",   handle_ch_preins_on)
@@ -643,14 +683,16 @@ def _set_aux(address, key, value, broadcast_type="input_options"):
 def handle_ch_gain(address, *args):
     ch = _ch_num(address)
     if not ch: return
-    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    # GET reply ,sff: arg0=str, arg1=raw, arg2=dB value. Push ,f: arg0=dB.
+    val = float(args[2]) if isinstance(args[0], str) and len(args) >= 3 else float(args[0]) if args else 0.0
     app_state.mixer["channels"].setdefault(ch, {})["gain"] = val
     asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "gain", "value": val}))
 
 def handle_ch_trim(address, *args):
     ch = _ch_num(address)
     if not ch: return
-    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    # GET reply ,sff: use arg2 (actual dB value)
+    val = float(args[2]) if isinstance(args[0], str) and len(args) >= 3 else float(args[0]) if args else 0.0
     app_state.mixer["channels"].setdefault(ch, {})["trim"] = val
     asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "trim", "value": val}))
 
@@ -660,14 +702,14 @@ def handle_ch_hpf_on(address, *args):   _set_ch(address, "locut",   bool(parse_w
 def handle_ch_hpf_freq(address, *args):
     ch = _ch_num(address)
     if not ch: return
-    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 80.0
+    val = float(args[2]) if isinstance(args[0], str) and len(args) >= 3 else float(args[0]) if args else 80.0
     app_state.mixer["channels"].setdefault(ch, {})["locut_freq"] = val
     asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "locut_freq", "value": val}))
 def handle_ch_lpf_on(address, *args):   _set_ch(address, "hicut",  bool(parse_wing_int(args)))
 def handle_ch_lpf_freq(address, *args):
     ch = _ch_num(address)
     if not ch: return
-    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 18000.0
+    val = float(args[2]) if isinstance(args[0], str) and len(args) >= 3 else float(args[0]) if args else 18000.0
     app_state.mixer["channels"].setdefault(ch, {})["hicut_freq"] = val
     asyncio.create_task(broadcast({"type": "input_options", "strip": "ch", "ch": ch, "key": "hicut_freq", "value": val}))
 def handle_ch_dly_on(address, *args):   _set_ch(address, "delay", bool(parse_wing_int(args)))
@@ -700,9 +742,26 @@ def handle_aux_gain(address, *args):
 def handle_aux_trim(address, *args):
     n = _ch_num(address)
     if not n: return
-    val = float(args[1]) if isinstance(args[0], str) and len(args) >= 2 else float(args[0]) if args else 0.0
+    val = float(args[2]) if isinstance(args[0], str) and len(args) >= 3 else float(args[0]) if args else 0.0
     app_state.mixer["aux"].setdefault(n, {})["trim"] = val
     asyncio.create_task(broadcast({"type": "input_options", "strip": "aux", "ch": n, "key": "trim", "value": val}))
+def handle_aux_phantom(address, *args): _set_aux(address, "phantom", bool(parse_wing_int(args)))
+def handle_aux_invert(address, *args):  _set_aux(address, "invert",  bool(parse_wing_int(args)))
+def handle_aux_hpf_on(address, *args):  _set_aux(address, "locut",   bool(parse_wing_int(args)))
+def handle_aux_hpf_freq(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = float(args[2]) if isinstance(args[0], str) and len(args) >= 3 else float(args[0]) if args else 80.0
+    app_state.mixer["aux"].setdefault(n, {})["locut_freq"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "aux", "ch": n, "key": "locut_freq", "value": val}))
+def handle_aux_lpf_on(address, *args):   _set_aux(address, "hicut", bool(parse_wing_int(args)))
+def handle_aux_lpf_freq(address, *args):
+    n = _ch_num(address)
+    if not n: return
+    val = float(args[2]) if isinstance(args[0], str) and len(args) >= 3 else float(args[0]) if args else 18000.0
+    app_state.mixer["aux"].setdefault(n, {})["hicut_freq"] = val
+    asyncio.create_task(broadcast({"type": "input_options", "strip": "aux", "ch": n, "key": "hicut_freq", "value": val}))
+def handle_ch_tilt_on(address, *args): _set_ch(address, "tilt", bool(parse_wing_int(args)))
 def handle_aux_icon(address, *args):
     n = _ch_num(address)
     if not n: return
@@ -1172,11 +1231,10 @@ async def websocket_endpoint(websocket: WebSocket):
         "wing_ip": WING_IP(),
         "wing_port": WING_OSC_PORT(),
     }))
-    # Trigger a fresh bulk query on each new browser connect IF Wing is
-    # connected. This ensures a just-opened tab always gets current state.
-    # Batched at 10 queries / 20ms so the Wing is not flooded.
-    if app_state.wing_connected:
-        asyncio.create_task(bulk_query_wing())
+    # New browsers receive the cached snapshot above — no re-query needed.
+    # app_state.mixer stays current via /*S~ push events and the one-time
+    # bulk query that runs when Wing first connects. Only Wing reconnects
+    # (detected by wing_probe_loop) trigger a fresh bulk query.
     try:
         async for raw in websocket.iter_text():
             await handle_ws_message(raw, websocket)
@@ -1204,7 +1262,8 @@ async def handle_ws_message(raw: str, ws: WebSocket):
         val   = float(msg.get("value", 0.75))
         path  = _fader_path(strip, n)
         if path:
-            send_osc(path, val)             # Wing accepts ,f raw 0..1
+            db_val = _wing_raw_to_db(val)    # Wing SET expects dB (,f dB_value)
+            send_osc(path, db_val)
             _update_mirror(strip, n, "fader", val)
 
     elif t == "mute":
@@ -1583,126 +1642,142 @@ QUERY_BATCH_DELAY = 0.02
 
 async def bulk_query_wing():
     """
-    Query all channel/bus/main/aux names, faders, mutes, and pans from the Wing
-    on startup. Sends individual OSC GET requests (no args = query) and lets the
-    existing OSC dispatcher handlers update app_state.mixer as replies arrive.
+    Two-tier Wing state query:
 
-    We stagger requests slightly to avoid overloading Wing's OSC server with
-    hundreds of UDP packets at once.
+    Tier 1 — ESSENTIAL (runs every browser connect, ~240 queries, ~0.5s):
+      name, fader, mute, pan, solo for all 40ch/8aux/16bus/4main/8mtx/16dca
+      These are the parameters visible in the mixer strip UI.
+
+    Tier 2 — DEEP (runs once after Wing connects, ~800 queries, background):
+      EQ, dynamics, gate, sends, inserts, input options for ch/aux/bus/main
+      These are only needed when the Channel Settings panel is opened.
+      Runs with longer gaps so it never blocks meter/fader updates.
     """
     if not app_state.wing_client:
         log.warning("bulk_query_wing: no OSC client — skipping")
         return
 
-    log.info("Querying Wing for current state (names, faders, mutes, pans)…")
+    # ── Tier 1: Essential strip state ────────────────────────────────────────
+    essential: list[str] = []
 
-    # Build list of all paths to query
-    queries: list[str] = []
-
-    # Channels 1..40 — all parameters
     for n in range(1, QUERY_CHANNELS + 1):
-        queries += [f"/ch/{n}/name", f"/ch/{n}/fdr", f"/ch/{n}/mute",
-                    f"/ch/{n}/pan",  f"/ch/{n}/$solo",
-                    f"/ch/{n}/icon", f"/ch/{n}/col",
-                    # Input options
-                    f"/ch/{n}/gain", f"/ch/{n}/trim",
-                    f"/ch/{n}/phantom", f"/ch/{n}/inv",
-                    f"/ch/{n}/hpf/on", f"/ch/{n}/hpf/f",
-                    f"/ch/{n}/lpf/on", f"/ch/{n}/lpf/f",
-                    f"/ch/{n}/dly/on", f"/ch/{n}/dly/time",
-                    # EQ
-                    f"/ch/{n}/eq/on",
-                    f"/ch/{n}/eq/1g", f"/ch/{n}/eq/1f", f"/ch/{n}/eq/1q",
-                    f"/ch/{n}/eq/2g", f"/ch/{n}/eq/2f", f"/ch/{n}/eq/2q",
-                    f"/ch/{n}/eq/3g", f"/ch/{n}/eq/3f", f"/ch/{n}/eq/3q",
-                    f"/ch/{n}/eq/4g", f"/ch/{n}/eq/4f", f"/ch/{n}/eq/4q",
-                    # Dynamics
-                    f"/ch/{n}/dyn/on",  f"/ch/{n}/dyn/thr", f"/ch/{n}/dyn/ratio",
-                    f"/ch/{n}/dyn/att", f"/ch/{n}/dyn/hld", f"/ch/{n}/dyn/rel",
-                    f"/ch/{n}/dyn/gain", f"/ch/{n}/dyn/knee",
-                    # Gate
-                    f"/ch/{n}/gate/on",  f"/ch/{n}/gate/thr",   f"/ch/{n}/gate/range",
-                    f"/ch/{n}/gate/att", f"/ch/{n}/gate/hld",   f"/ch/{n}/gate/rel",
-                    # Bus sends 1..16
-                    *[f"/ch/{n}/send/{b}/lvl" for b in range(1, 17)],
-                    *[f"/ch/{n}/send/{b}/on"  for b in range(1, 17)],
-                    *[f"/ch/{n}/send/{b}/pan" for b in range(1, 17)],
-                    # Main sends
-                    *[f"/ch/{n}/main/{m}/on"  for m in range(1, 5)],
-                    *[f"/ch/{n}/main/{m}/lvl" for m in range(1, 5)],
-                    # Inserts
-                    f"/ch/{n}/preins/on", f"/ch/{n}/preins/ins",
-                    f"/ch/{n}/postins/on", f"/ch/{n}/postins/ins",
-                ]
+        essential += [f"/ch/{n}/name", f"/ch/{n}/fdr", f"/ch/{n}/mute",
+                      f"/ch/{n}/pan",  f"/ch/{n}/$solo",
+                      f"/ch/{n}/icon", f"/ch/{n}/col"]
 
-    # Aux inputs 1..8
     for n in range(1, QUERY_AUX + 1):
-        queries += [f"/aux/{n}/name", f"/aux/{n}/fdr", f"/aux/{n}/mute",
-                    f"/aux/{n}/pan",  f"/aux/{n}/$solo",
-                    f"/aux/{n}/icon", f"/aux/{n}/col",
-                    f"/aux/{n}/gain", f"/aux/{n}/trim",
-                    f"/aux/{n}/eq/on",
-                    f"/aux/{n}/eq/1g", f"/aux/{n}/eq/1f", f"/aux/{n}/eq/1q",
-                    f"/aux/{n}/eq/2g", f"/aux/{n}/eq/2f", f"/aux/{n}/eq/2q",
-                    f"/aux/{n}/eq/3g", f"/aux/{n}/eq/3f", f"/aux/{n}/eq/3q",
-                    f"/aux/{n}/eq/4g", f"/aux/{n}/eq/4f", f"/aux/{n}/eq/4q",
-                    f"/aux/{n}/dyn/on", f"/aux/{n}/dyn/thr", f"/aux/{n}/dyn/ratio",
-                    f"/aux/{n}/dyn/att", f"/aux/{n}/dyn/hld", f"/aux/{n}/dyn/rel",
-                    f"/aux/{n}/gate/on", f"/aux/{n}/gate/thr", f"/aux/{n}/gate/range",
-                    f"/aux/{n}/gate/att", f"/aux/{n}/gate/hld", f"/aux/{n}/gate/rel",
-                    *[f"/aux/{n}/send/{b}/lvl" for b in range(1, 17)],
-                    *[f"/aux/{n}/send/{b}/on"  for b in range(1, 17)],
-                    f"/aux/{n}/preins/on", f"/aux/{n}/preins/ins",
-                ]
+        essential += [f"/aux/{n}/name", f"/aux/{n}/fdr", f"/aux/{n}/mute",
+                      f"/aux/{n}/pan",  f"/aux/{n}/$solo",
+                      f"/aux/{n}/icon", f"/aux/{n}/col"]
 
-    # Mix buses 1..16
     for n in range(1, QUERY_BUSES + 1):
-        queries += [f"/bus/{n}/name", f"/bus/{n}/fdr", f"/bus/{n}/mute",
-                    f"/bus/{n}/pan",  f"/bus/{n}/$solo",
-                    f"/bus/{n}/eq/on",
-                    f"/bus/{n}/eq/1g", f"/bus/{n}/eq/1f", f"/bus/{n}/eq/1q",
-                    f"/bus/{n}/eq/2g", f"/bus/{n}/eq/2f", f"/bus/{n}/eq/2q",
-                    f"/bus/{n}/eq/3g", f"/bus/{n}/eq/3f", f"/bus/{n}/eq/3q",
-                    f"/bus/{n}/eq/4g", f"/bus/{n}/eq/4f", f"/bus/{n}/eq/4q",
-                    f"/bus/{n}/dyn/on", f"/bus/{n}/dyn/thr", f"/bus/{n}/dyn/ratio",
-                    f"/bus/{n}/dyn/att", f"/bus/{n}/dyn/rel",
-                ]
+        essential += [f"/bus/{n}/name", f"/bus/{n}/fdr", f"/bus/{n}/mute",
+                      f"/bus/{n}/pan",  f"/bus/{n}/$solo"]
 
-    # Mains 1..4
     for n in range(1, QUERY_MAINS + 1):
-        queries += [f"/main/{n}/name", f"/main/{n}/fdr", f"/main/{n}/mute",
-                    f"/main/{n}/pan",  f"/main/{n}/$solo",
-                    f"/main/{n}/eq/on",
-                    f"/main/{n}/eq/1g", f"/main/{n}/eq/1f", f"/main/{n}/eq/1q",
-                    f"/main/{n}/eq/2g", f"/main/{n}/eq/2f", f"/main/{n}/eq/2q",
-                    f"/main/{n}/dyn/on", f"/main/{n}/dyn/thr", f"/main/{n}/dyn/ratio",
-                    f"/main/{n}/dyn/att", f"/main/{n}/dyn/rel",
-                ]
+        essential += [f"/main/{n}/name", f"/main/{n}/fdr", f"/main/{n}/mute",
+                      f"/main/{n}/pan",  f"/main/{n}/$solo"]
 
-    # Matrix 1..8
-    QUERY_MATRIX = 8
-    for n in range(1, QUERY_MATRIX + 1):
-        queries += [f"/mtx/{n}/name", f"/mtx/{n}/fdr", f"/mtx/{n}/mute",
-                    f"/mtx/{n}/pan",  f"/mtx/{n}/$solo"]
+    for n in range(1, 9):
+        essential += [f"/mtx/{n}/name", f"/mtx/{n}/fdr", f"/mtx/{n}/mute",
+                      f"/mtx/{n}/pan",  f"/mtx/{n}/$solo"]
 
-    # DCA 1..16
     for n in range(1, QUERY_DCA + 1):
-        queries += [f"/dca/{n}/name", f"/dca/{n}/fdr", f"/dca/{n}/mute", f"/dca/{n}/$solo"]
+        essential += [f"/dca/{n}/name", f"/dca/{n}/fdr", f"/dca/{n}/mute",
+                      f"/dca/{n}/$solo"]
 
-    log.info(f"Sending {len(queries)} OSC queries to Wing…")
+    log.info(f"Querying Wing: {len(essential)} essential params (faders/mutes/names)…")
 
-    # Send in small batches with a short sleep to avoid UDP packet storms
-    BATCH = 10
-    for i in range(0, len(queries), BATCH):
-        batch = queries[i:i + BATCH]
-        for path in batch:
+    # Send essential queries in batches — small delay so Wing isn't flooded
+    # but fast enough that the UI populates within ~0.5s
+    BATCH_E = 20
+    for i in range(0, len(essential), BATCH_E):
+        for path in essential[i:i + BATCH_E]:
             try:
                 app_state.wing_client.send_message(path, [])
             except Exception as e:
-                log.warning(f"Query send error ({path}): {e}")
-        await asyncio.sleep(QUERY_BATCH_DELAY)
+                log.warning(f"Essential query error ({path}): {e}")
+        await asyncio.sleep(0.005)   # 5ms between batches → ~0.3s total
 
-    log.info("Bulk Wing query complete — waiting for replies via OSC dispatcher")
+    log.info("Essential Wing query sent — scheduling deep query in background…")
+    asyncio.create_task(_deep_query_wing())
+
+
+async def _deep_query_wing():
+    """
+    Tier 2: Query EQ, dynamics, gate, sends, and input options.
+    Runs in the background after the essential query completes.
+    Uses longer inter-batch delays so it never starves meter/fader updates.
+    """
+    await asyncio.sleep(1.0)   # Let essential replies land first
+    if not app_state.wing_client:
+        return
+
+    deep: list[str] = []
+
+    # Channel detail
+    for n in range(1, QUERY_CHANNELS + 1):
+        deep += [
+            # Input options
+            f"/ch/{n}/in/set/$g", f"/ch/{n}/in/set/trim",
+            f"/ch/{n}/in/set/$vph", f"/ch/{n}/in/set/inv",
+            f"/ch/{n}/in/set/dlyon", f"/ch/{n}/in/set/dly",
+            f"/ch/{n}/flt/lc", f"/ch/{n}/flt/lcf",
+            f"/ch/{n}/flt/hc", f"/ch/{n}/flt/hcf", f"/ch/{n}/flt/tf",
+            # EQ
+            f"/ch/{n}/eq/on",
+            f"/ch/{n}/eq/1g", f"/ch/{n}/eq/1f", f"/ch/{n}/eq/1q",
+            f"/ch/{n}/eq/2g", f"/ch/{n}/eq/2f", f"/ch/{n}/eq/2q",
+            f"/ch/{n}/eq/3g", f"/ch/{n}/eq/3f", f"/ch/{n}/eq/3q",
+            f"/ch/{n}/eq/4g", f"/ch/{n}/eq/4f", f"/ch/{n}/eq/4q",
+            # Dynamics
+            f"/ch/{n}/dyn/on", f"/ch/{n}/dyn/thr", f"/ch/{n}/dyn/ratio",
+            f"/ch/{n}/dyn/att", f"/ch/{n}/dyn/hld", f"/ch/{n}/dyn/rel",
+            f"/ch/{n}/dyn/gain", f"/ch/{n}/dyn/knee",
+            # Gate
+            f"/ch/{n}/gate/on", f"/ch/{n}/gate/thr", f"/ch/{n}/gate/range",
+            f"/ch/{n}/gate/att", f"/ch/{n}/gate/hld", f"/ch/{n}/gate/rel",
+            # Bus sends (lvl + on only — pan fetched on demand)
+            *[f"/ch/{n}/send/{b}/lvl" for b in range(1, 17)],
+            *[f"/ch/{n}/send/{b}/on"  for b in range(1, 17)],
+            # Inserts
+            f"/ch/{n}/preins/on", f"/ch/{n}/postins/on",
+        ]
+
+    # Aux detail
+    for n in range(1, QUERY_AUX + 1):
+        deep += [
+            f"/aux/{n}/in/set/$g", f"/aux/{n}/in/set/trim",
+            f"/aux/{n}/flt/lc", f"/aux/{n}/flt/hc",
+            f"/aux/{n}/eq/on",
+            f"/aux/{n}/eq/1g", f"/aux/{n}/eq/1f", f"/aux/{n}/eq/1q",
+            f"/aux/{n}/eq/2g", f"/aux/{n}/eq/2f", f"/aux/{n}/eq/2q",
+            f"/aux/{n}/dyn/on", f"/aux/{n}/dyn/thr",
+            f"/aux/{n}/gate/on", f"/aux/{n}/gate/thr",
+            *[f"/aux/{n}/send/{b}/lvl" for b in range(1, 17)],
+            *[f"/aux/{n}/send/{b}/on"  for b in range(1, 17)],
+        ]
+
+    # Bus/Main EQ+dyn
+    for n in range(1, QUERY_BUSES + 1):
+        deep += [f"/bus/{n}/eq/on", f"/bus/{n}/dyn/on", f"/bus/{n}/dyn/thr"]
+    for n in range(1, QUERY_MAINS + 1):
+        deep += [f"/main/{n}/eq/on", f"/main/{n}/dyn/on"]
+
+    log.info(f"Deep Wing query: {len(deep)} params (EQ/dyn/gate/sends)…")
+
+    BATCH_D = 10
+    for i in range(0, len(deep), BATCH_D):
+        if not app_state.wing_client:
+            break
+        for path in deep[i:i + BATCH_D]:
+            try:
+                app_state.wing_client.send_message(path, [])
+            except Exception as e:
+                log.warning(f"Deep query error ({path}): {e}")
+        await asyncio.sleep(0.02)   # 20ms between deep batches — non-blocking
+
+    log.info("Deep Wing query complete")
 
 
 # ── Wing Native Binary Meter Engine ──────────────────────────────────────────
@@ -1883,6 +1958,119 @@ def _parse_meter_udp(data: bytes) -> dict:
     return result
 
 
+
+# ── Wing Binary TCP Push Event Parser ────────────────────────────────────────
+# When Wing sends parameter changes via the native binary TCP channel (port 2222),
+# they arrive as: 0xD7 <4-byte-hash> 0xD5/D6 <4-byte-float>  or
+#                 0xD7 <4-byte-hash> 0xD4 <4-byte-int>  etc.
+# These are interleaved with meter data on the same TCP stream.
+# We parse the hash, look it up against known Wing parameter hashes, and
+# broadcast the change to browsers exactly like the OSC /*S~ handler does.
+
+# Build hash→path lookup by querying Wing on startup (populated at runtime)
+_hash_to_path: dict = {}   # {hash_int: "/ch/1/fdr"}
+
+async def _read_binary_tcp_changes(tcp_reader) -> None:
+    """
+    Read binary parameter push events from the Wing meter TCP stream.
+    Wing sends these interleaved with meter data whenever a parameter changes.
+    Packet format (from V3.1.0 docs and hex dump analysis):
+        0xD7 <4-byte big-endian hash>  = parameter identifier
+        0xD5 <4-byte big-endian f32>   = new float value
+        0xD6 <4-byte big-endian f32>   = new raw float (0..1)
+        0xD4 <4-byte big-endian i32>   = new integer value
+        0xD8                           = toggle
+    """
+    # Non-blocking drain: read whatever bytes are already buffered, don't wait.
+    # Using timeout=0 avoids adding latency to the meter loop on every iteration.
+    buf = bytearray()
+    try:
+        chunk = await asyncio.wait_for(tcp_reader.read(4096), timeout=0.0)
+        if chunk:
+            buf.extend(chunk)
+    except (asyncio.TimeoutError, Exception):
+        pass   # Nothing buffered right now — normal
+
+    i = 0
+    while i < len(buf) - 5:
+        if buf[i] == 0xD7:
+            # Hash token — next 4 bytes are the parameter hash
+            param_hash = int.from_bytes(buf[i+1:i+5], 'big')
+            i += 5
+            if i >= len(buf):
+                break
+            val_token = buf[i]
+            if val_token == 0xD5 and i + 4 < len(buf):
+                # float32 (typically dB values)
+                import struct
+                val = struct.unpack('>f', buf[i+1:i+5])[0]
+                path = _hash_to_path.get(param_hash)
+                if path:
+                    _dispatch_binary_change(path, val, 'float')
+                else:
+                    log.debug(f"[BIN] unknown hash 0x{param_hash:08x} float={val:.4f}")
+                i += 5
+            elif val_token == 0xD6 and i + 4 < len(buf):
+                # raw float 0..1
+                import struct
+                val = struct.unpack('>f', buf[i+1:i+5])[0]
+                path = _hash_to_path.get(param_hash)
+                if path:
+                    _dispatch_binary_change(path, val, 'raw')
+                else:
+                    log.debug(f"[BIN] unknown hash 0x{param_hash:08x} raw={val:.4f}")
+                i += 5
+            elif val_token == 0xD4 and i + 4 < len(buf):
+                # int32
+                val = int.from_bytes(buf[i+1:i+5], 'big', signed=True)
+                path = _hash_to_path.get(param_hash)
+                if path:
+                    _dispatch_binary_change(path, val, 'int')
+                else:
+                    log.debug(f"[BIN] unknown hash 0x{param_hash:08x} int={val}")
+                i += 5
+            elif val_token == 0xD8:
+                # toggle
+                path = _hash_to_path.get(param_hash)
+                if path:
+                    log.debug(f"[BIN] toggle {path}")
+                i += 1
+            else:
+                i += 1
+        else:
+            i += 1
+
+
+def _dispatch_binary_change(path: str, val, val_type: str) -> None:
+    """
+    Route a binary parameter change to the same OSC handlers that process
+    /*S~ push events, so the mixer state and browser clients stay in sync.
+    """
+    try:
+        parts = path.strip('/').split('/')
+        if not parts:
+            return
+
+        # Convert value to args tuple matching what OSC handlers expect
+        # For binary pushes: single value, no string label prefix
+        if val_type == 'float' or val_type == 'raw':
+            args = (float(val),)
+        else:
+            args = (int(val),)
+
+        # Dispatch to the correct handler via the dispatcher
+        if app_state.osc_server:
+            handlers = app_state.osc_server._dispatcher.handlers_for_address(path)
+            for h in handlers:
+                try:
+                    h.invoke(path, *args)
+                except Exception as e:
+                    log.debug(f"[BIN] handler error for {path}: {e}")
+        log.debug(f"[BIN] {path} = {val} ({val_type})")
+    except Exception as e:
+        log.debug(f"[BIN] dispatch error {path}: {e}")
+
+
 async def meter_engine():
     """
     Full Wing hardware meter loop:
@@ -1979,6 +2167,12 @@ async def meter_engine():
                             "settings and that UDP port %d is reachable from Wing",
                             METER_UDP_PORT,
                         )
+
+                # Read any binary parameter change events from TCP stream
+                try:
+                    await _read_binary_tcp_changes(tcp_reader)
+                except Exception:
+                    pass
 
                 # Non-blocking UDP read
                 try:

@@ -11,8 +11,34 @@
 # WINDOWS NOTE:
 #   network_mode: host does NOT work on Windows Docker (Docker runs inside a
 #   WSL2/Hyper-V VM, so "host" binds to the VM's interface, not your PC's).
-#   We use bridge mode with explicit port mappings instead. All UDP ports that
-#   Wing sends packets TO must be listed here or they will be silently dropped.
+#   This file uses bridge mode with explicit port mappings instead. All ports
+#   that Wing sends packets to must be listed here or they will be dropped.
+#
+# LINUX / MACOS NOTE:
+#   If you are on Linux and want simpler networking (no NAT), replace the
+#   ports: block with:  network_mode: host
+#   macOS Docker Desktop does not support host networking either.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# PORT REFERENCE:
+#
+#   8000/tcp  Web UI (browser → container)
+#
+#   2224/udp  OSC receive port (Wing → container, subscription push events)
+#             Wing is told to send events here via the /%2224/*S command.
+#             Must match LOCAL_OSC_PORT in .env (default: 2224).
+#
+#   2222/tcp  Wing binary meter interface (container → Wing, TCP OUTBOUND)
+#             The container opens a TCP connection to Wing on this port to
+#             subscribe to hardware meter data. Outbound TCP does not need
+#             a port mapping, but listing it here makes the intent clear.
+#             NOTE: this is TCP, NOT UDP.
+#
+#   2225/udp  Meter data receiver (Wing → container, UDP)
+#             Wing sends binary meter packets to this UDP port in response
+#             to the TCP meter subscription. Must match METER_UDP_PORT in
+#             .env (default: 2225).
+#
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -25,29 +51,25 @@ services:
     restart: unless-stopped
 
     # ── Network ──────────────────────────────────────────────────────────────
-    # Bridge mode with explicit port mapping — required on Windows.
-    # Port layout:
-    #   8000/tcp  — FastAPI web UI (browser connects here)
-    #   2224/udp  — OSC subscription push events (Wing → container)
-    #               Wing is told to send events to host:2224 via /%2224/*S
-    #   2222/udp  — Wing meter data (Wing → container, native binary protocol)
-    #   2223/udp  — Wing OSC server (container → Wing outbound; Wing replies
-    #               back to source port 2224, so this is outbound only)
     ports:
-      - "8000:8000"          # Web UI
-      - "2224:2224/udp"      # OSC subscription event receiver
-      - "2222:2222/udp"      # Meter data receiver (native binary)
+      - "8000:8000"           # Web UI (TCP)
+      - "2224:2224/udp"       # OSC subscription push events (Wing → container)
+      - "2225:2225/udp"       # Meter UDP data         (Wing → container)
+      # 2222/tcp is OUTBOUND (container opens TCP to Wing) — no mapping needed
+      # 2223/udp is Wing's OSC server port (outbound only) — no mapping needed
 
     # ── Audio device access ───────────────────────────────────────────────────
+    # privileged: true lets entrypoint.sh detect /dev/snd at runtime
+    # and configure audio group access for USB recording.
     privileged: true
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     volumes:
-      - recordings:/recordings
-      - snapshots:/snapshots
-      - ./.env:/app/.env
-      - ./docker-compose.yml:/app/docker-compose.yml
-      - /var/run/docker.sock:/var/run/docker.sock
+      - recordings:/recordings        # WAV recording storage (Docker-managed)
+      - snapshots:/snapshots          # Scene/snapshot files  (Docker-managed)
+      - ./.env:/app/.env              # Setup Wizard writes Wing IP, ports, etc.
+      - ./docker-compose.yml:/app/docker-compose.yml  # Readable by Setup Wizard
+      - /var/run/docker.sock:/var/run/docker.sock      # Enables auto-restart from UI
 
     # ── Environment ──────────────────────────────────────────────────────────
     env_file: .env
