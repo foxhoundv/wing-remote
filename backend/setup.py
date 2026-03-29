@@ -194,6 +194,102 @@ def _compose_audio_enabled() -> bool:
 # 2. OSC CONNECTIVITY TEST  (Wing-correct protocol)
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def discover_wing(timeout: float = 2.0, known_ip: str = '') -> dict:
+    """
+    Auto-discover a Behringer Wing on the local network.
+
+    Sends WING? to: (1) direct unicast to known_ip — works through Docker
+    bridge mode where broadcasts are blocked; (2) subnet broadcast derived
+    from known_ip; (3) 255.255.255.255 global broadcast as fallback.
+
+    Returns dict with found=True/False, and if found: ip, name, model, firmware.
+    """
+    import socket as _socket
+
+    import socket as _socket2
+    # Build send targets — unicast first (works through Docker bridge),
+    # then subnet broadcasts derived from known_ip AND the server's own
+    # LAN IP (works on first run when Wing IP is still the placeholder).
+    _targets = []
+    if known_ip and known_ip not in ('', '192.168.1.100'):
+        _targets.append(known_ip)                          # direct unicast
+        _p = known_ip.split('.')
+        if len(_p) == 4:
+            _targets.append(f'{_p[0]}.{_p[1]}.{_p[2]}.255')
+
+    # Derive subnet broadcast from the server's own LAN IP(s)
+    try:
+        # Connect a dummy socket to get the outbound LAN IP
+        _s = _socket2.socket(_socket2.AF_INET, _socket2.SOCK_DGRAM)
+        _s.connect(('8.8.8.8', 80))
+        _lan_ip = _s.getsockname()[0]
+        _s.close()
+        _lp = _lan_ip.split('.')
+        if len(_lp) == 4:
+            _lan_bcast = f'{_lp[0]}.{_lp[1]}.{_lp[2]}.255'
+            if _lan_bcast not in _targets:
+                _targets.append(_lan_bcast)   # server's own subnet broadcast
+    except Exception:
+        pass
+    _targets.append('255.255.255.255')                     # global bcast fallback
+
+    loop = asyncio.get_event_loop()
+    result_future: asyncio.Future = loop.create_future()
+
+    class _Discovery(asyncio.DatagramProtocol):
+        def __init__(self, holder):
+            self._h = holder
+        def connection_made(self, transport):
+            self._h[0] = transport
+            for _tgt in _targets:
+                try:
+                    transport.sendto(b'WING?', (_tgt, 2222))
+                except Exception:
+                    pass
+        def datagram_received(self, data, addr):
+            if not result_future.done():
+                try:
+                    msg = data.decode('ascii', errors='replace').strip()
+                    if msg.startswith('WING,'):
+                        parts = msg.split(',')
+                        result_future.set_result({
+                            'found':    True,
+                            'ip':       parts[1] if len(parts) > 1 else addr[0],
+                            'name':     parts[2] if len(parts) > 2 else 'Wing',
+                            'model':    parts[3] if len(parts) > 3 else '',
+                            'serial':   parts[4] if len(parts) > 4 else '',
+                            'firmware': parts[5] if len(parts) > 5 else '',
+                            'raw':      msg,
+                        })
+                except Exception:
+                    pass
+        def error_received(self, exc):
+            pass
+
+    transport_holder = [None]
+    transport = None
+    try:
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        sock.bind(('', 0))
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _Discovery(transport_holder),
+            sock=sock,
+        )
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(result_future), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            return {'found': False, 'message': 'No Wing found on local network'}
+    except Exception as e:
+        return {'found': False, 'message': str(e)}
+    finally:
+        if transport:
+            transport.close()
+
+
 async def test_osc_connection(ip: str, port: int, timeout: float = 3.0) -> dict:
     """
     Test OSC connectivity to a Behringer Wing.
@@ -303,28 +399,34 @@ async def _udp_probe(ip: str, port: int, timeout: float) -> bool:
 
 
 async def _udp_send_recv(ip: str, port: int, packet: bytes, timeout: float) -> Optional[bytes]:
-    """Send a UDP packet and wait for a response."""
+    """Send a UDP packet and wait for a response, returning as soon as one arrives."""
     loop = asyncio.get_event_loop()
-    received: list = []
+    future: asyncio.Future = loop.create_future()
 
     class _Proto(asyncio.DatagramProtocol):
         def connection_made(self, t):
             t.sendto(packet)
         def datagram_received(self, data, addr):
-            received.append(data)
+            if not future.done():
+                future.set_result(data)
         def error_received(self, exc):
-            pass
+            if not future.done():
+                future.set_exception(exc)
 
+    transport = None
     try:
         transport, _ = await loop.create_datagram_endpoint(
             lambda: _Proto(), remote_addr=(ip, port)
         )
-        await asyncio.sleep(timeout)
-        transport.close()
-        return received[0] if received else None
+        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+    except asyncio.TimeoutError:
+        return None
     except Exception as e:
         log.warning(f"UDP send/recv error: {e}")
         return None
+    finally:
+        if transport:
+            transport.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,14 +436,24 @@ async def _udp_send_recv(ip: str, port: int, packet: bytes, timeout: float) -> O
 def apply_env_config(config: dict) -> dict:
     keys_to_write = {
         "WING_IP":          config.get("wing_ip", "192.168.1.100"),
-        "WING_OSC_PORT":    str(config.get("wing_osc_port", 2222)),
-        "LOCAL_OSC_PORT":   str(config.get("local_osc_port", 2223)),
+        "WING_OSC_PORT":    str(config.get("wing_osc_port", 2223)),
+        "LOCAL_OSC_PORT":   str(config.get("local_osc_port", 2224)),
         "SAMPLE_RATE":      str(config.get("sample_rate", 48000)),
         "BIT_DEPTH":        str(config.get("bit_depth", 32)),
         "RECORD_CHANNELS":  str(config.get("record_channels", 32)),
     }
     try:
         existing_lines = ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else []
+
+        # Sanity check: if the file looks corrupted (e.g. contains JS/code
+        # instead of KEY=VALUE pairs) start fresh rather than propagating corruption.
+        valid_lines = [l for l in existing_lines
+                       if not l.strip() or l.strip().startswith('#')
+                       or '=' in l.split('#')[0]]
+        if len(valid_lines) < len(existing_lines) * 0.5 and len(existing_lines) > 5:
+            log.warning(".env appears corrupted — rebuilding from scratch")
+            existing_lines = []
+
         updated_keys   = set()
         new_lines      = []
 

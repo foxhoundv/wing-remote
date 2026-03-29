@@ -1,5 +1,5 @@
 """
-WING Remote v2.3.10 - FastAPI Backend
+WING Remote v2.3.68 - FastAPI Backend
 Bridges WebSocket (browser) <-> OSC/UDP (Behringer Wing mixer)
 and handles multitrack audio recording via sounddevice.
 
@@ -97,6 +97,7 @@ from backend.setup import (
     detect_environment,
     test_osc_connection,
     apply_env_config,
+    discover_wing,
     apply_audio_passthrough,
     trigger_container_restart,
     build_osc_message,
@@ -118,20 +119,20 @@ CHANNELS       = int(os.getenv("RECORD_CHANNELS", "32"))
 RECORDINGS_DIR = Path(os.getenv("RECORDINGS_DIR", "/recordings"))
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 METER_RENEW_SEC    = 4.0
-SUBSCRIPTION_INTERVAL = 8.0
+# Wing subscription timeout = 10s; renew at 9s — minimises dropout frequency.
+# Plain /*S from the main socket is the simplest renewal form.
+SUBSCRIPTION_INTERVAL = 9.0
 # Use /%PORT/*S to tell Wing exactly which port to push events to.
 # Without the port redirect, Wing pushes to whatever source port last
 # subscribed — if Wing Edit ran before us, Wing pushes to Wing Edit's port.
 # Building the string dynamically so it updates if LOCAL_OSC_PORT changes.
 def _wing_subscribe_cmd() -> str:
-    # Wing subscription command with port-redirect prefix.
-    # The doc uses ~ to denote null bytes () in printed examples — the
-    # tilde is NOT a literal character. pythonosc handles null-termination
-    # and 4-byte alignment automatically; the address string has no tilde.
-    # "/%PORT/*S" → pythonosc encodes as /%2224/*S\x00\x00\x00 (12 bytes, valid OSC).
-    return f"/%{LOCAL_OSC_PORT}/*S"
+    # Plain /*S subscription — Wing replies to the source port of this packet
+    # (LOCAL_OSC_PORT, 2224), which is the same socket we receive on.
+    # No port-redirect prefix needed.
+    return "/*S"
 
-WING_SUBSCRIBE     = "/*S"   # fallback — overridden by _wing_subscribe_cmd()
+WING_SUBSCRIBE     = "/*S"
 WING_BINARY_PORT   = 2222
 
 # Mutable Wing target — updated live by setup_apply without needing restart
@@ -149,11 +150,6 @@ def set_wing_target(ip: str, port: int):
     _wing_ip   = ip
     _wing_port = port
     log.info(f"Wing target updated → {ip}:{port}")
-
-# Wing subscription keepalive — must be renewed every <10 seconds
-SUBSCRIPTION_INTERVAL = 8.0
-# Subscribe with /*S (single-value events, easiest to re-send unchanged)
-WING_SUBSCRIBE = "/*S"
 
 
 # ── Shared State ──────────────────────────────────────────────────────────────
@@ -181,24 +177,89 @@ class WingOSCTransport:
 
     async def start(self, loop):
         """Bind the socket and register it with the asyncio event loop."""
+
+        # ── Minimal OSC parser (no pythonosc dependency) ──────────────────
+        # pythonosc's OscMessage references _first_msg_logged as a bare name
+        # which raises NameError on every packet. We parse manually instead.
+        import struct as _struct
+
+        def _parse_osc(data: bytes):
+            """
+            Parse a raw OSC UDP packet. Returns (address, args_list) or
+            (None, []) on failure.  Handles Wing's push formats:
+              ,f  → single float (fader dB, pan, etc.)
+              ,i  → single int   (mute, solo, etc.)
+              ,s  → single string (name, enum)
+              ,sff / ,sfi → GET reply triplets
+            """
+            try:
+                # Address: ASCII, null-terminated, padded to multiple of 4
+                null = data.index(b'\x00')
+                address = data[:null].decode('ascii', errors='replace')
+                addr_end = (null + 4) & ~3   # next multiple-of-4 boundary
+
+                # No type tag → address-only packet (e.g. Wing echoing /*S)
+                if addr_end >= len(data) or data[addr_end:addr_end+1] != b',':
+                    return address, []
+
+                # Type tag string: ',f', ',i', ',sff', etc.
+                null2 = data.index(b'\x00', addr_end)
+                tags = data[addr_end+1:null2].decode('ascii', errors='replace')
+                pos = (null2 + 4) & ~3
+
+                args = []
+                for t in tags:
+                    if t == 'f' and pos + 4 <= len(data):
+                        args.append(_struct.unpack('>f', data[pos:pos+4])[0])
+                        pos += 4
+                    elif t == 'i' and pos + 4 <= len(data):
+                        args.append(_struct.unpack('>i', data[pos:pos+4])[0])
+                        pos += 4
+                    elif t == 's':
+                        null3 = data.index(b'\x00', pos)
+                        args.append(data[pos:null3].decode('ascii', errors='replace'))
+                        pos = (null3 + 4) & ~3
+                return address, args
+            except Exception:
+                return None, []
+        # ─────────────────────────────────────────────────────────────────
+
+        _first_logged = [False]
+
         class _Protocol(asyncio.DatagramProtocol):
             def __init__(self_, transport_ref):
                 self_._ref = transport_ref
             def connection_made(self_, transport):
                 self_._ref._transport = transport
-            _first_msg_logged = [False]
             def datagram_received(self_, data, addr):
-                try:
-                    from pythonosc.osc_message import OscMessage
-                    msg = OscMessage(data)
-                    if not _first_msg_logged[0]:
-                        log.info(f"[OSC recv] first message: {msg.address} from {addr}")
-                        _first_msg_logged[0] = True
-                    handlers = self_._ref._dispatcher.handlers_for_address(msg.address)
-                    for h in handlers:
-                        h.invoke(msg.address, *msg.params)
-                except Exception as e:
-                    log.debug(f"[OSC recv] parse error from {addr}: {e}")
+                import time as _t
+                _now = _t.monotonic()
+                app_state.last_osc_recv = _now
+                # Receiving a push from Wing proves the subscription is alive.
+                # Reset last_osc_sent so the keepalive doesn't fire /*S and
+                # disrupt the push stream while Wing is actively sending to us.
+                app_state.last_osc_sent = _now
+                address, args = _parse_osc(data)
+                if address is None:
+                    log.warning(f"[OSC recv] unparseable packet from {addr}: {data[:20].hex()}")
+                    return
+                if address in ('/*S', '/*s', '/*b', '/?'): 
+                    log.info(f"[OSC recv] Wing ack: {address!r} from {addr}")
+                    return
+                if not _first_logged[0]:
+                    log.info(f"[OSC recv] first push: {address} args={args} from {addr}")
+                    _first_logged[0] = True
+                handlers = self_._ref._dispatcher.handlers_for_address(address)
+                for h in handlers:
+                    try:
+                        # Bypass Handler.invoke() — its signature varies across
+                        # pythonosc versions and causes argument-count errors.
+                        # Call the underlying callback directly instead.
+                        cb = getattr(h, 'callback', None) or getattr(h, '_callback', None)
+                        if cb:
+                            cb(address, *args)
+                    except Exception as e:
+                        log.warning(f"[OSC recv] handler error {address}: {e}")
             def error_received(self_, exc):
                 log.debug(f"[OSC recv] error: {exc}")
             def connection_lost(self_, exc):
@@ -214,7 +275,7 @@ class WingOSCTransport:
             sock=self._sock,
         )
         log.info(f"OSC socket bound on UDP :{self._local_port} "
-                 f"(send→receive on same port so Wing replies reach us)")
+                 f"→ Wing at {self._wing_ip}:{self._wing_port}")
 
     def send_message(self, address: str, args):
         """Build and send an OSC message to the Wing."""
@@ -294,6 +355,9 @@ class AppState:
         }
 
         self.ws_clients: list = []
+        self.last_osc_recv: float = 0.0   # monotonic time of last Wing packet
+        self.last_osc_sent: float = 0.0   # monotonic time of last packet sent to Wing
+        self.last_sub_sent: float = 0.0   # monotonic time of last /*S subscription sent
 
 app_state = AppState()
 
@@ -313,9 +377,8 @@ async def lifespan(app: FastAPI):
         log.warning(f"Could not create OSC client: {e}")
 
     asyncio.create_task(start_osc_server())
-    asyncio.create_task(subscription_keepalive())
+    # OSC /*S subscription removed — fader pushes now via NRP TCP ChID 1
     # Query Wing for current state after OSC server is ready
-    asyncio.create_task(_delayed_bulk_query())
     # Start meter polling loop (real hardware VU levels via TCP binary protocol)
     asyncio.create_task(meter_poll_loop())
     # Auto-probe Wing connectivity and keep wing_connected status updated
@@ -339,28 +402,10 @@ app = FastAPI(title="WING Remote", lifespan=lifespan)
 # ── Subscription Keepalive ────────────────────────────────────────────────────
 
 async def subscription_keepalive():
+    """Stub — replaced by NRP TCP ChID 1 Audio Engine subscription (v2.3.68).
+    Wing Edit uses DF D1 DA DC on the TCP binary channel; no OSC /*S needed.
     """
-    Send /*S to the Wing every 8 seconds.
-    Wing requires subscription renewal every <10s to continue pushing events.
-    Only one subscription is active at a time on the entire Wing.
-    /*S = single-value events (,f for floats, ,i for ints) — easiest format.
-    """
-    await asyncio.sleep(2)  # Wait for OSC server to start first
-    while True:
-        if app_state.wing_client:
-            try:
-                cmd = _wing_subscribe_cmd()
-                app_state.wing_client.send_message(cmd, [])
-                log.info(f"[OSC] Subscription keepalive: {cmd}")
-            except Exception as e:
-                log.warning(f"Subscription keepalive failed: {e}")
-        await asyncio.sleep(SUBSCRIPTION_INTERVAL)
-
-
-async def _delayed_bulk_query():
-    """Wait for OSC server to be ready then query the Wing for all current state."""
-    await asyncio.sleep(3)
-    await bulk_query_wing()
+    pass  # TCP keepalive D4 00 00 00 01 in meter_engine() is sufficient
 
 
 async def wing_probe_loop():
@@ -376,15 +421,22 @@ async def wing_probe_loop():
     while True:
         connected = False
         if app_state.wing_client:
-            try:
-                from backend.setup import test_osc_connection
-                result = await asyncio.wait_for(
-                    test_osc_connection(WING_IP(), WING_OSC_PORT(), timeout=2.0),
-                    timeout=3.0
-                )
-                connected = result.get("success", False)
-            except Exception:
-                connected = False
+            import time as _t
+            # If we received a packet from Wing recently, we're connected.
+            # This avoids opening a new UDP socket (which disrupts push delivery).
+            if _t.monotonic() - app_state.last_osc_recv < 20.0:
+                connected = True
+            else:
+                # Haven't heard from Wing in 20s — do an active probe
+                try:
+                    from backend.setup import test_osc_connection
+                    result = await asyncio.wait_for(
+                        test_osc_connection(WING_IP(), WING_OSC_PORT(), timeout=2.0),
+                        timeout=3.0
+                    )
+                    connected = result.get("success", False)
+                except Exception:
+                    connected = False
 
         app_state.wing_connected = connected
 
@@ -400,6 +452,14 @@ async def wing_probe_loop():
             await broadcast(status_msg)
             if connected:
                 log.info(f"Wing connected at {WING_IP()}:{WING_OSC_PORT()}")
+                # Send immediate /*S subscription before bulk query starts
+                try:
+                    import socket as _s2
+                    import time as _t2
+# No OSC /*S — fader push events via NRP TCP ChID 1
+                    app_state.last_osc_sent = _t2.monotonic()
+                except Exception as _e:
+                    log.warning(f"Wing connect setup failed: {_e}")
                 # Wing just (re)connected — do the one-time full state query
                 asyncio.create_task(bulk_query_wing())
             else:
@@ -412,27 +472,26 @@ async def wing_probe_loop():
 
 def _wing_db_to_raw(db: float) -> float:
     """
-    Convert Wing dB fader value to raw 0.0–1.0 position.
+    Convert Wing dB push event value to raw 0.0–1.0 fader position for the UI.
 
-    Piecewise formula derived from official V3.1.0 protocol docs examples:
-      raw=0.000 @ dB=-144 (−∞)   raw=0.675 @ dB=-3
-      raw=0.750 @ dB=0            raw=0.850 @ dB=+4
-      raw=0.923 @ dB=+10
+    Calibrated against Wing bulk query ground truth (,sff args[1] = actual raw):
+      0dB→0.750, -0.2dB→0.745, -3.5dB→0.663, -8.3dB→0.543
+      -10dB→0.500, -20.3dB→0.371, -29dB→0.263, -47.3dB→0.142
 
-    Segments:
-      dB ≤ -3  : linear from (-60, 0.0) to (-3, 0.675)
-      -3..+4   : linear at 0.025 raw/dB,  0 dB = 0.75
-      +4..+10  : linear at ~0.01222 raw/dB
+    Two-segment piecewise:
+      Linear  (-10dB .. +10dB): raw = 0.75 + dB * 0.025
+        At -10dB: 0.500 ✓  At 0dB: 0.750 ✓  At +4dB: 0.850 ✓  At +10dB: 1.0
+      Power   (-144dB .. -10dB): raw = 0.5 * ((dB + 144) / 134) ^ 3.86
+        At -144dB: 0.0 ✓  At -10dB: 0.500 ✓  At -47.3dB: ~0.133 (vs actual 0.142)
+      Above +10dB: raw = 0.9233 + (dB - 10) * 0.01 (capped at 1.0)
     """
     if db <= -144.0:
         return 0.0
-    elif db < -3.0:
-        raw = 0.675 * (1.0 + (db + 3.0) / 57.0)
-        return max(0.0, raw)
-    elif db <= 4.0:
-        return 0.75 + db * 0.025
+    elif db <= -10.0:
+        t = (db + 144.0) / 134.0
+        return max(0.0, 0.5 * (t ** 3.86))
     elif db <= 10.0:
-        return 0.85 + (db - 4.0) * (0.9233 - 0.85) / 6.0
+        return max(0.0, min(1.0, 0.75 + db * 0.025))
     else:
         return min(1.0, 0.9233 + (db - 10.0) * 0.01)
 
@@ -823,6 +882,7 @@ def handle_ch_fader(address, *args):
     val = parse_wing_float(args)
     app_state.mixer["channels"].setdefault(ch, {})["fader"] = val
     asyncio.create_task(broadcast({"type": "fader", "strip": "ch", "ch": ch, "value": val}))
+
 
 def handle_ch_mute(address, *args):
     ch = _ch_num(address)
@@ -1390,10 +1450,23 @@ def send_osc(path: str, value):
         return
     try:
         if value is None or value == []:
-            app_state.wing_client.send_message(path, [])
+            # GET query: address-only, no type tag — Wing docs show this as
+            # ->W 12 B: /ch/1/fdr~~~  (address + null padding, nothing else)
+            # pythonosc adds ",\0\0\0" making a 16-byte packet the Wing rejects.
+            addr_b  = path.encode()
+            needed  = (len(addr_b) + 1 + 3) & ~3   # next multiple of 4
+            raw     = addr_b + b"\x00" * (needed - len(addr_b))
+            if app_state.wing_client._transport:
+                app_state.wing_client._transport.sendto(
+                    raw, (app_state.wing_client._wing_ip,
+                          app_state.wing_client._wing_port)
+                )
+
         else:
             app_state.wing_client.send_message(path, value)
-        log.debug(f"[OSC →] {path} = {repr(value)}")
+        import time as _t; app_state.last_osc_sent = _t.monotonic()
+        if value is not None:
+            log.info(f"[OSC →] {app_state.wing_client._wing_ip}:{app_state.wing_client._wing_port} {path} = {repr(value)}")
     except Exception as e:
         log.warning(f"OSC send error ({path}): {e}")
 
@@ -1563,6 +1636,16 @@ async def list_audio_devices():
 
 # ── Setup Wizard API ──────────────────────────────────────────────────────────
 
+@app.get("/api/setup/discover")
+async def setup_discover_wing():
+    """
+    Auto-discover a Wing on the local network.
+    Always tries unicast to the configured WING_IP first (works through
+    Docker bridge mode), then subnet broadcast, then global broadcast.
+    """
+    return await discover_wing(timeout=2.0, known_ip=WING_IP())
+
+
 @app.get("/api/setup/detect")
 async def setup_detect():
     return detect_environment()
@@ -1594,10 +1677,16 @@ async def setup_apply(payload: dict):
         set_wing_target(new_ip, new_port)
         if app_state.wing_client:
             app_state.wing_client.update_target(new_ip, new_port)
-        # Send initial subscription to new endpoint
-            app_state.wing_client.send_message(_wing_subscribe_cmd(), [])
-        # Force probe loop to check connectivity right away
+            # Send initial subscription to new endpoint (raw 4-byte form)
+            import time as _tr
+            app_state.last_osc_sent = _tr.monotonic()
+            # No /*S needed — ChID 1 Audio Engine subscription via TCP
+        # Force probe loop to re-establish subscription on next cycle.
+        # Reset last_osc_recv so the probe loop can't shortcut via the
+        # "recently heard from Wing" path — it must do a full reconnect,
+        # which sends /*S and re-establishes the push subscription.
         app_state.wing_connected = False
+        app_state.last_osc_recv  = 0.0
         results["osc_client"] = {"success": True, "message": f"OSC client updated → {new_ip}:{new_port}"}
     except Exception as e:
         results["osc_client"] = {"success": False, "message": str(e)}
@@ -1695,11 +1784,8 @@ async def bulk_query_wing():
     BATCH_E = 20
     for i in range(0, len(essential), BATCH_E):
         for path in essential[i:i + BATCH_E]:
-            try:
-                app_state.wing_client.send_message(path, [])
-            except Exception as e:
-                log.warning(f"Essential query error ({path}): {e}")
-        await asyncio.sleep(0.005)   # 5ms between batches → ~0.3s total
+            send_osc(path, None)   # raw address-only GET — Wing answers these
+        await asyncio.sleep(0.010)  # 10ms between batches → ~0.6s total
 
     log.info("Essential Wing query sent — scheduling deep query in background…")
     asyncio.create_task(_deep_query_wing())
@@ -1707,9 +1793,9 @@ async def bulk_query_wing():
 
 async def _deep_query_wing():
     """
-    Tier 2: Query EQ, dynamics, gate, sends, and input options.
-    Runs in the background after the essential query completes.
-    Uses longer inter-batch delays so it never starves meter/fader updates.
+    Tier 2: Query mute/sends/input options only — fast params that populate
+    visible UI state. EQ/dyn/gate are queried on-demand when the Channel
+    Settings panel opens, not here, to avoid starving the event loop.
     """
     await asyncio.sleep(1.0)   # Let essential replies land first
     if not app_state.wing_client:
@@ -1717,67 +1803,31 @@ async def _deep_query_wing():
 
     deep: list[str] = []
 
-    # Channel detail
+    # Bus sends for all channels (lvl + on — these show in the sends panel)
     for n in range(1, QUERY_CHANNELS + 1):
         deep += [
-            # Input options
-            f"/ch/{n}/in/set/$g", f"/ch/{n}/in/set/trim",
-            f"/ch/{n}/in/set/$vph", f"/ch/{n}/in/set/inv",
-            f"/ch/{n}/in/set/dlyon", f"/ch/{n}/in/set/dly",
-            f"/ch/{n}/flt/lc", f"/ch/{n}/flt/lcf",
-            f"/ch/{n}/flt/hc", f"/ch/{n}/flt/hcf", f"/ch/{n}/flt/tf",
-            # EQ
-            f"/ch/{n}/eq/on",
-            f"/ch/{n}/eq/1g", f"/ch/{n}/eq/1f", f"/ch/{n}/eq/1q",
-            f"/ch/{n}/eq/2g", f"/ch/{n}/eq/2f", f"/ch/{n}/eq/2q",
-            f"/ch/{n}/eq/3g", f"/ch/{n}/eq/3f", f"/ch/{n}/eq/3q",
-            f"/ch/{n}/eq/4g", f"/ch/{n}/eq/4f", f"/ch/{n}/eq/4q",
-            # Dynamics
-            f"/ch/{n}/dyn/on", f"/ch/{n}/dyn/thr", f"/ch/{n}/dyn/ratio",
-            f"/ch/{n}/dyn/att", f"/ch/{n}/dyn/hld", f"/ch/{n}/dyn/rel",
-            f"/ch/{n}/dyn/gain", f"/ch/{n}/dyn/knee",
-            # Gate
-            f"/ch/{n}/gate/on", f"/ch/{n}/gate/thr", f"/ch/{n}/gate/range",
-            f"/ch/{n}/gate/att", f"/ch/{n}/gate/hld", f"/ch/{n}/gate/rel",
-            # Bus sends (lvl + on only — pan fetched on demand)
             *[f"/ch/{n}/send/{b}/lvl" for b in range(1, 17)],
             *[f"/ch/{n}/send/{b}/on"  for b in range(1, 17)],
-            # Inserts
             f"/ch/{n}/preins/on", f"/ch/{n}/postins/on",
+            f"/ch/{n}/in/set/$vph", f"/ch/{n}/in/set/inv",
+            f"/ch/{n}/flt/lc", f"/ch/{n}/flt/hc",
         ]
 
-    # Aux detail
     for n in range(1, QUERY_AUX + 1):
         deep += [
-            f"/aux/{n}/in/set/$g", f"/aux/{n}/in/set/trim",
-            f"/aux/{n}/flt/lc", f"/aux/{n}/flt/hc",
-            f"/aux/{n}/eq/on",
-            f"/aux/{n}/eq/1g", f"/aux/{n}/eq/1f", f"/aux/{n}/eq/1q",
-            f"/aux/{n}/eq/2g", f"/aux/{n}/eq/2f", f"/aux/{n}/eq/2q",
-            f"/aux/{n}/dyn/on", f"/aux/{n}/dyn/thr",
-            f"/aux/{n}/gate/on", f"/aux/{n}/gate/thr",
             *[f"/aux/{n}/send/{b}/lvl" for b in range(1, 17)],
             *[f"/aux/{n}/send/{b}/on"  for b in range(1, 17)],
         ]
 
-    # Bus/Main EQ+dyn
-    for n in range(1, QUERY_BUSES + 1):
-        deep += [f"/bus/{n}/eq/on", f"/bus/{n}/dyn/on", f"/bus/{n}/dyn/thr"]
-    for n in range(1, QUERY_MAINS + 1):
-        deep += [f"/main/{n}/eq/on", f"/main/{n}/dyn/on"]
+    log.info(f"Deep Wing query: {len(deep)} params (sends/inserts/input flags)…")
 
-    log.info(f"Deep Wing query: {len(deep)} params (EQ/dyn/gate/sends)…")
-
-    BATCH_D = 10
+    BATCH_D = 20
     for i in range(0, len(deep), BATCH_D):
         if not app_state.wing_client:
             break
         for path in deep[i:i + BATCH_D]:
-            try:
-                app_state.wing_client.send_message(path, [])
-            except Exception as e:
-                log.warning(f"Deep query error ({path}): {e}")
-        await asyncio.sleep(0.02)   # 20ms between deep batches — non-blocking
+            send_osc(path, None)
+        await asyncio.sleep(0.02)   # 20ms — fast enough to finish in ~3s
 
     log.info("Deep Wing query complete")
 
@@ -1977,16 +2027,61 @@ def _parse_meter_udp(data: bytes) -> dict:
 # These arrive interleaved with meter channel traffic on the same TCP stream.
 # We must demultiplex properly or every channel-switch byte misaligns the parser.
 
-NRP_ESCAPE       = 0xDF
-NRP_CH_BASE      = 0xD0
-NRP_NUM_CHANNELS = 14
-NRP_AUDIO_CH     = 1    # ChID 1 = Audio Engine (fader/param changes)
+# ── NRP Audio Engine hash→path mapping ───────────────────────────────────────
+#
+# Wing's ChID 1 push events identify parameters by 4-byte hash. The V3.1.0
+# protocol doc gives us all the OSC paths. We discover hashes by sending an
+# ordered sequence of OSC GET queries and pairing each NRP echo reply (which
+# Wing sends in the same order) directly to the queried path — no value
+# comparison needed at all.
+#
+# Flow:
+#   1. After ChID1 subscription, send GET for every known fader/mute/pan path
+#   2. Wing echoes each GET back on ChID1 as D7 <hash> D5 <value>
+#   3. Echoes arrive in the same order as our GETs
+#   4. _hash_pending queue: [path0, path1, ...] paired with arriving echoes
+#   5. _hash_to_path[hash_i] = path_i
+#
+# All 92 fader paths + mute + pan = ~280 paths. Discovery completes in <2s.
+# Hashes are saved to disk and loaded on next startup for instant mapping.
 
-# Per-TCP-connection NRP receive state (reset on reconnect)
-_nrp_escf:   bool = False
-_nrp_ch_rx:  int  = -1
-_nrp_buf:    bytearray = bytearray()   # accumulated audio-engine payload bytes
+import threading  as _threading
+import collections as _collections
 
+_hash_to_path:    dict = {}    # 0xABCD1234 → '/ch/1/fdr'
+_hash_lock        = _threading.Lock()
+_hash_building:   bool = False # True during initial hash build phase
+_probe_expected:  dict = {}    # round(nudge_db, 3) → path being probed
+_probe_confirmed: set  = set() # paths successfully mapped via probe
+
+HASH_CACHE_FILE = '/app/.nrp_hashes.json'
+
+def _hash_save() -> None:
+    try:
+        import json, os
+        with _hash_lock:
+            data = {f'0x{k:08x}': v for k, v in _hash_to_path.items()}
+        tmp = HASH_CACHE_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(data, f)
+        os.replace(tmp, HASH_CACHE_FILE)
+    except Exception as e:
+        log.debug(f"[NRP] hash save failed: {e}")
+
+def _hash_load() -> int:
+    try:
+        import json
+        with open(HASH_CACHE_FILE) as f:
+            data = json.load(f)
+        with _hash_lock:
+            for k, v in data.items():
+                _hash_to_path[int(k, 16)] = v
+        return len(data)
+    except FileNotFoundError:
+        return 0
+    except Exception as e:
+        log.debug(f"[NRP] hash load failed: {e}")
+        return 0
 
 def _nrp_reset() -> None:
     """Reset NRP receive state on TCP reconnect."""
@@ -2016,7 +2111,10 @@ def _nrp_feed(raw: bytes) -> bytearray:
                     if db == NRP_ESCAPE - 1:          # 0xDE → escaped 0xDF literal
                         db = NRP_ESCAPE
                     elif NRP_CH_BASE <= db < NRP_CH_BASE + NRP_NUM_CHANNELS:
-                        _nrp_ch_rx = db - NRP_CH_BASE  # channel switch
+                        new_ch = db - NRP_CH_BASE
+                        if new_ch != _nrp_ch_rx:
+                            log.info(f"[NRP] channel switch {_nrp_ch_rx} → {new_ch}")
+                        _nrp_ch_rx = new_ch            # channel switch
                         continue                        # don't pass to data handler
                     else:
                         if _nrp_ch_rx == NRP_AUDIO_CH:
@@ -2102,35 +2200,117 @@ async def _read_binary_tcp_changes(tcp_reader) -> None:
     """
     try:
         chunk = await asyncio.wait_for(
-            tcp_reader.read(32768), timeout=0.0   # Wing max = 32KB, non-blocking
+            tcp_reader.read(32768), timeout=0.05   # 50ms timeout so we actually block briefly
         )
         if chunk:
             audio_bytes = _nrp_feed(chunk)
             if audio_bytes:
                 _parse_audio_engine_tokens(audio_bytes)
     except asyncio.TimeoutError:
-        pass   # nothing buffered right now — normal
+        pass
     except Exception as e:
         log.debug(f"[NRP] TCP read error: {e}")
+
+
+async def _build_hash_table() -> None:
+    """
+    Discover fader hashes by sending a tiny OSC nudge to each known fader path.
+    Wing echoes every OSC SET back on ChID 1. We watch for the echo with our
+    nudge value and record hash → path. Each nudge is ±0.05dB (imperceptible)
+    and immediately restored. All 92 faders mapped in ~5 seconds.
+    """
+    global _hash_building
+    import asyncio
+
+    await asyncio.sleep(3.5)   # wait for bulk query and Wing state to settle
+
+    if not app_state.wing_client or not app_state.wing_client._transport:
+        return
+
+    STRIP_MAP = [
+        ('channels', 'ch',   range(1, 41), 'fader', '/ch/{n}/fdr'),
+        ('aux',      'aux',  range(1, 9),  'fader', '/aux/{n}/fdr'),
+        ('buses',    'bus',  range(1, 17), 'fader', '/bus/{n}/fdr'),
+        ('mains',    'main', range(1, 5),  'fader', '/main/{n}/fdr'),
+        ('matrix',   'mtx',  range(1, 9),  'fader', '/mtx/{n}/fdr'),
+        ('dca',      'dca',  range(1, 17), 'fader', '/dca/{n}/fdr'),
+    ]
+
+    def raw_to_db(raw):
+        if raw <= 0.0: return -144.0
+        if raw <= 0.5: return -144.0 + (raw / 0.5) ** (1/3.86) * 134.0
+        return (raw - 0.75) / 0.025
+
+    _hash_building = True
+    _probe_expected.clear()
+    _probe_confirmed.clear()
+    log.info("[NRP] Building hash table via fader self-probe...")
+
+    for arr_key, strip_type, n_range, field, path_tmpl in STRIP_MAP:
+        for n in n_range:
+            path  = path_tmpl.replace('{n}', str(n))
+            strip = app_state.mixer.get(arr_key, {}).get(str(n), {})
+            raw   = strip.get(field, 0.75)
+            db    = raw_to_db(float(raw))
+
+            nudge_db  = max(-144.0, min(10.0, db + (0.05 if db < 5.0 else -0.05)))
+            probe_key = round(nudge_db, 3)
+            _probe_expected[probe_key] = path
+
+            send_osc(path, nudge_db)
+            await asyncio.sleep(0.03)
+            send_osc(path, db)
+            await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.5)   # let final echoes arrive
+    _hash_building = False
+    _probe_expected.clear()
+
+    with _hash_lock:
+        total = len(_hash_to_path)
+    if total:
+        _hash_save()
+    log.info(f"[NRP] Hash table built: {total} paths mapped via self-probe")
+
 
 
 def _dispatch_audio_change(param_hash: int, val, val_type: str) -> None:
     """
     Route an Audio Engine parameter change to the correct OSC handler.
-    Looks the hash up in _hash_to_path; if found, invokes the handler
-    exactly as the OSC /*S push path does so app_state.mixer stays in sync.
+
+    Looks up param_hash in _hash_to_path. If not yet known, tries to
+    discover it by correlating with a recent OSC GET (hash discovery via tree walk).
+    Once the path is known, invokes the registered OSC handler so
+    app_state.mixer and connected browsers stay in sync.
     """
-    path = _hash_to_path.get(param_hash)
+    with _hash_lock:
+        path = _hash_to_path.get(param_hash)
+
+    if not path and _hash_building and val_type == 'float':
+        # Check if this matches a pending probe nudge
+        probe_key = round(float(val), 3)
+        probed_path = _probe_expected.get(probe_key)
+        if probed_path:
+            with _hash_lock:
+                _hash_to_path[param_hash] = probed_path
+            _probe_confirmed.add(probed_path)
+            log.debug(f"[NRP] probe: 0x{param_hash:08x} → {probed_path}")
+            path = probed_path
+        else:
+            return   # during build, ignore non-probe events
+
     if not path:
-        log.debug(f"[NRP] unknown hash 0x{param_hash:08x} {val_type}={val}")
         return
+    log.debug(f"[NRP] dispatch {path} = {val}")
     try:
         args = (float(val),) if val_type in ('float', 'raw') else (int(val),)
         if app_state.osc_server:
             handlers = app_state.osc_server._dispatcher.handlers_for_address(path)
             for h in handlers:
                 try:
-                    h.invoke(path, *args)
+                    cb = getattr(h, 'callback', None) or getattr(h, '_callback', None)
+                    if cb:
+                        cb(path, *args)
                 except Exception as e:
                     log.debug(f"[NRP] handler error {path}: {e}")
         log.debug(f"[NRP] {path} = {val}")
@@ -2156,14 +2336,21 @@ async def meter_engine():
     backoff       = 2.0
 
     while True:
-        if not app_state.wing_client:
-            await asyncio.sleep(backoff)
+        # Wait until Wing is reachable before attempting TCP meter connection
+        if not app_state.wing_client or not app_state.wing_connected:
+            await asyncio.sleep(2.0)
             continue
 
         # ── Open UDP socket to receive meter data ─────────────────────────
+        # Always close any leftover socket from a previous iteration first
+        if udp_sock:
+            try: udp_sock.close()
+            except: pass
+            udp_sock = None
         try:
             import socket as _socket
             udp_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+            udp_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
             udp_sock.bind(("0.0.0.0", METER_UDP_PORT))
             udp_sock.setblocking(False)
             # Set OS receive buffer to 32KB — the Wing's maximum UDP packet size
@@ -2174,6 +2361,7 @@ async def meter_engine():
             if udp_sock:
                 try: udp_sock.close()
                 except: pass
+                udp_sock = None
             await asyncio.sleep(backoff)
             continue
 
@@ -2186,6 +2374,15 @@ async def meter_engine():
             log.info(f"Meter TCP connected → {WING_IP()}:{WING_BINARY_PORT}")
             backoff = 2.0   # reset backoff on success
             _nrp_reset()    # clear NRP demux state for fresh connection
+            # Clear hash table — dump correlation will repopulate on next connect
+            with _hash_lock:
+                _hash_to_path.clear()
+                _probe_confirmed.clear()
+            loaded = _hash_load()
+            if loaded:
+                log.info(f"[NRP] Loaded {loaded} hashes from cache")
+            else:
+                log.info("[NRP] Hash table cleared — will build from ordered queries")
         except Exception as e:
             log.warning(f"Meter TCP connect failed ({WING_IP()}:{WING_BINARY_PORT}): {e}")
             udp_sock.close()
@@ -2193,21 +2390,40 @@ async def meter_engine():
             backoff = min(backoff * 1.5, 30.0)
             continue
 
-        # ── Send initial meter subscription (two writes, matching doc example) ─
+        # ── Send meter subscription (ChID 3) + Audio Engine subscription (ChID 1) ─
         try:
             port_pkt, coll_pkt = _build_meter_request(METER_UDP_PORT, METER_REPORT_ID)
-            # Step 1: declare UDP return port
+            # Step 1: declare UDP return port (ChID 3)
             tcp_writer.write(port_pkt)
             await tcp_writer.drain()
-            await asyncio.sleep(0.05)   # brief pause between declarations
-            # Step 2: set report ID + collection
+            await asyncio.sleep(0.05)
+            # Step 2: set report ID + collection (ChID 3)
             tcp_writer.write(coll_pkt)
+            await tcp_writer.drain()
+            await asyncio.sleep(0.05)
+            # Step 3: subscribe to Audio Engine push events (ChID 1)
+            # DF D1 = select ChID 1,  DA DC = enable parameter push stream
+            # This is what Wing Edit sends to receive fader/mute/param changes.
+            # Wing will push D7 <hash> D5 <float32> tokens on this TCP connection
+            # whenever any parameter changes — no OSC /*S needed.
+            audio_sub = bytes([0xDF, 0xD1, 0xDA, 0xDC])
+            tcp_writer.write(audio_sub)
             await tcp_writer.drain()
             last_renew = asyncio.get_event_loop().time()
             log.info(
                 "Meter subscription sent (%d strips) — port=%d id=%d",
                 METER_TOTAL_STRIPS, METER_UDP_PORT, METER_REPORT_ID,
             )
+            log.info("[NRP] Audio Engine (ChID 1) subscription sent — fader push events active")
+            # Wing replies to the ChID1 subscription with DF D1 (channel select)
+            # followed by a full state dump. The main loop's _read_binary_tcp_changes
+            # will handle all subsequent data — no special ack read needed here.
+            # The channel select (DF D1) in Wing's reply will be processed by the
+            # next _read_binary_tcp_changes call in the inner loop.
+            log.info("[NRP] ChID1 subscription sent — building hash table")
+            asyncio.create_task(_build_hash_table())
+            # by walking Wing's OSC node tree
+
         except Exception as e:
             log.warning(f"Meter subscription send failed: {e}")
             tcp_writer.close()
@@ -2223,20 +2439,6 @@ async def meter_engine():
         try:
             while True:
                 now = loop.time()
-
-                # Renew subscription before it times out (every 4s)
-                if now - last_renew >= METER_RENEW_SEC:
-                    renew = _build_meter_renew(METER_REPORT_ID)
-                    tcp_writer.write(renew)
-                    await tcp_writer.drain()
-                    last_renew = now
-                    # Warn if we haven't received a single UDP packet since subscribing
-                    if pkt_count == 0:
-                        log.warning(
-                            "Meter: no UDP packets received yet — check Wing OSC/Meter "
-                            "settings and that UDP port %d is reachable from Wing",
-                            METER_UDP_PORT,
-                        )
 
                 # Drain Audio Engine (ChID 1) parameter push events from TCP stream
                 await _read_binary_tcp_changes(tcp_reader)

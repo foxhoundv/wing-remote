@@ -194,9 +194,11 @@ function handleServerMessage(msg) {
     const arrKey = sectionMap[msg.strip] || 'channels';
     const i = parseInt(msg.ch) - 1;
     if (i >= 0 && state[arrKey]?.[i]) {
+      const key = `${msg.strip}-${msg.ch}`;
+      // Suppress incoming push if user is currently dragging this fader
+      if (typeof activeDrags !== 'undefined' && activeDrags.has(key)) return;
       state[arrKey][i].fader = msg.value;
       // Fast in-place DOM update for smooth fader movement
-      const key    = `${msg.strip}-${msg.ch}`;
       const fill   = document.getElementById(`fader-fill-${key}`);
       const handle = document.getElementById(`fader-handle-${key}`);
       const dbEl   = document.getElementById(`fader-db-${key}`);

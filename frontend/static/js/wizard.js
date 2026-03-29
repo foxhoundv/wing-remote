@@ -1,4 +1,4 @@
-// Wing Remote v2.1 — Setup Wizard
+// Wing Remote v2.3.68 — Setup Wizard
 // ════════════════════════════════════════════════════════════════════════
 // SETUP WIZARD JS
 // ════════════════════════════════════════════════════════════════════════
@@ -9,12 +9,15 @@ const WIZ = {
   oscTested: false,
   oscOk: false,
   audioToggleUserSet: false,  // true once user has manually touched the toggle
+  discoveredWing: null,       // result from /api/setup/discover
 };
 
 // Open / close
 function openWizard() {
   document.getElementById('wizardOverlay').classList.add('visible');
   if (!WIZ.env) runDetection();
+  // Start Wing discovery immediately — runs in parallel with detection
+  runWingDiscovery();
 }
 function closeWizard() {
   document.getElementById('wizardOverlay').classList.remove('visible');
@@ -29,7 +32,7 @@ async function checkAndLaunchWizard() {
     const ip = data.current_env?.WING_IP || '192.168.1.100';
     // Launch wizard if still on default IP or no audio configured
     if (ip === '192.168.1.100' || !data.compose_audio_enabled) {
-      openWizard();
+      openWizard();   // openWizard also calls runWingDiscovery()
       populateDetection(data);
     }
   } catch(e) {
@@ -173,6 +176,79 @@ function onAudioToggle() {
   // Mark that the user has explicitly set this — rescan won't override it
   WIZ.audioToggleUserSet = true;
   updateDiskEstimate();
+}
+
+// ── Wing Auto-Discovery ───────────────────────────────────────────────
+async function runWingDiscovery() {
+  // Show spinner, hide other panels
+  document.getElementById('wiz-discovery-searching').style.display = 'block';
+  document.getElementById('wiz-discovery-found').style.display    = 'none';
+  document.getElementById('wiz-discovery-manual').style.display   = 'none';
+  WIZ.discoveredWing = null;
+
+  try {
+    // The backend uses its own configured WING_IP for unicast discovery.
+    const r    = await fetch('/api/setup/discover');
+    const data = await r.json();
+    document.getElementById('wiz-discovery-searching').style.display = 'none';
+
+    if (data.found) {
+      WIZ.discoveredWing = data;
+      // Pre-fill the hidden manual fields too (used by applyConfig)
+      document.getElementById('wiz-ip').value   = data.ip;
+      document.getElementById('wiz-port').value = '2223';
+
+      // Show found panel
+      const model = data.model ? ` (${data.model})` : '';
+      const fw    = data.firmware ? ` · fw ${data.firmware}` : '';
+      document.getElementById('wiz-found-name').textContent   = `${data.name || 'Wing'}${model}`;
+      document.getElementById('wiz-found-detail').textContent = `IP: ${data.ip}${fw}`;
+      document.getElementById('wiz-discovery-found').style.display = 'block';
+    } else {
+      // Not found — show manual entry with notice
+      document.getElementById('wiz-notfound-msg').style.display    = 'block';
+      document.getElementById('wiz-discovery-manual').style.display = 'block';
+    }
+  } catch(e) {
+    document.getElementById('wiz-discovery-searching').style.display = 'none';
+    document.getElementById('wiz-discovery-manual').style.display   = 'block';
+  }
+}
+
+function showManualEntry() {
+  // User chose to enter manually instead of using discovered Wing
+  document.getElementById('wiz-discovery-found').style.display   = 'none';
+  document.getElementById('wiz-notfound-msg').style.display      = 'none';
+  document.getElementById('wiz-discovery-manual').style.display  = 'block';
+}
+
+async function applyDiscoveredWing() {
+  if (!WIZ.discoveredWing) return;
+  // Directly apply the discovered Wing without waiting for the apply step
+  const payload = {
+    wing_ip:       WIZ.discoveredWing.ip,
+    wing_osc_port: 2223,
+    local_osc_port: parseInt(document.getElementById('wiz-localport').value) || 2224,
+    sample_rate:   parseInt(document.getElementById('wiz-sr')?.value) || 48000,
+    bit_depth:     parseInt(document.getElementById('wiz-bd')?.value) || 32,
+    record_channels: parseInt(document.getElementById('wiz-ch')?.value) || 32,
+    enable_audio_passthrough: document.getElementById('tog-audio')?.checked || false,
+  };
+  try {
+    await fetch('/api/setup/apply', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    // Update topbar
+    const ipEl = document.getElementById('wingIP');
+    if (ipEl) ipEl.value = WIZ.discoveredWing.ip;
+    // Advance to next step
+    wizNav(1);
+  } catch(e) {
+    document.getElementById('wiz-discovery-found').innerHTML +=
+      '<div style="color:var(--red);font-size:12px;margin-top:8px">Apply failed — check server connection</div>';
+  }
 }
 
 // ── OSC Test ──────────────────────────────────────────────────────────

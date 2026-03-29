@@ -589,22 +589,47 @@
       <!-- ── Step 1: Network ── -->
       <div class="wizard-panel" id="panel-1">
         <div class="wiz-section-label">Behringer Wing Network Settings</div>
-        <div class="wiz-row">
-          <div class="wiz-label">Wing IP Address</div>
-          <input class="wiz-input" id="wiz-ip" value="192.168.1.100" placeholder="e.g. 192.168.1.100">
+
+        <!-- Discovery result panel — shown when Wing is found -->
+        <div id="wiz-discovery-found" style="display:none;background:var(--bg-surface);border:1px solid var(--green);border-radius:4px;padding:16px 18px;margin-bottom:14px;">
+          <div style="color:var(--green);font-size:13px;font-weight:600;margin-bottom:6px;">✓ Wing Found</div>
+          <div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;" id="wiz-found-name"></div>
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px;" id="wiz-found-detail"></div>
+          <div style="display:flex;gap:10px;">
+            <button class="wiz-test-btn" style="flex:1" onclick="applyDiscoveredWing()">Connect to this Wing</button>
+            <button class="wiz-test-btn" style="flex:0 0 auto;background:var(--bg-deep);color:var(--text-dim)" onclick="showManualEntry()">Enter manually</button>
+          </div>
         </div>
-        <div class="wiz-row">
-          <div class="wiz-label">OSC Port (Wing) <span style="color:var(--amber);font-size:9px">fixed 2223</span></div>
-          <input class="wiz-input" id="wiz-port" value="2223" placeholder="2223" readonly title="Wing OSC port is always 2223">
+
+        <!-- Searching spinner — shown during 2-second discovery -->
+        <div id="wiz-discovery-searching" style="display:none;padding:20px 0;text-align:center;color:var(--text-dim);font-size:13px;">
+          <span class="spinner"></span>&nbsp; Searching for Wing on local network…
         </div>
-        <div class="wiz-row">
-          <div class="wiz-label">Local Listen Port</div>
-          <input class="wiz-input" id="wiz-localport" value="2224" placeholder="2224">
+
+        <!-- Manual entry — shown if not found or user clicks "Enter manually" -->
+        <div id="wiz-discovery-manual" style="display:none;">
+          <div id="wiz-notfound-msg" style="display:none;background:var(--bg-surface);border:1px solid var(--amber);border-radius:4px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--amber);">
+            No Wing found automatically. Enter the IP address manually.
+          </div>
+          <div class="wiz-row">
+            <div class="wiz-label">Wing IP Address</div>
+            <input class="wiz-input" id="wiz-ip" value="192.168.1.100" placeholder="e.g. 192.168.1.100">
+          </div>
+          <div class="wiz-row">
+            <div class="wiz-label">OSC Port (Wing) <span style="color:var(--amber);font-size:9px">fixed 2223</span></div>
+            <input class="wiz-input" id="wiz-port" value="2223" placeholder="2223" readonly title="Wing OSC port is always 2223">
+          </div>
+          <div class="wiz-row">
+            <div class="wiz-label">Local Listen Port</div>
+            <input class="wiz-input" id="wiz-localport" value="2224" placeholder="2224">
+          </div>
+          <div class="wiz-test-row">
+            <button class="wiz-test-btn" id="oscTestBtn" onclick="testOSC()">▶ Test Connection</button>
+            <div class="wiz-test-result" id="oscTestResult">Enter IP above then click Test</div>
+          </div>
         </div>
-        <div class="wiz-test-row">
-          <button class="wiz-test-btn" id="oscTestBtn" onclick="testOSC()">▶ Test Connection</button>
-          <div class="wiz-test-result" id="oscTestResult">Enter IP above then click Test</div>
-        </div>
+
+        <!-- Wing setup reminder — always visible -->
         <div class="wiz-section-label" style="margin-top:18px">Wing Setup Reminder</div>
         <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:3px;padding:12px 14px;font-size:12px;color:var(--text-dim);line-height:1.8;">
           On the Wing console:<br>

@@ -1,12 +1,20 @@
 // Wing Remote v2.1 — Fader Drag, Knob Drag, Touch, Mute/Solo/Rec
 // ── FADER DRAG ──────────────────────────────────────
 let dragState = null;
+// Tracks which fader strips are currently being dragged.
+// Incoming Wing push updates are suppressed for active drags to prevent
+// the server echo fighting the user's drag position.
+const activeDrags = new Set();
 function startFaderDrag(e, stripType, id) {
   e.preventDefault();
   const track = document.getElementById(`fader-track-${stripType}-${id}`);
   if (!track) return;
   const ch = _getStrip(stripType, id) || {fader:0.75};
   dragState = { stripType, id, track, startY: e.clientY, startFader: ch.fader };
+  // Mark this strip as being dragged — suppresses incoming /*S push updates
+  // that would fight the user's drag position
+  dragState.key = `${stripType}-${id}`;
+  activeDrags.add(dragState.key);
   document.addEventListener('mousemove', onFaderDrag);
   document.addEventListener('mouseup', endFaderDrag);
 }
@@ -17,6 +25,7 @@ function onFaderDrag(e) {
   setFader(dragState.stripType, dragState.id, val);
 }
 function endFaderDrag() {
+  if (dragState?.key) activeDrags.delete(dragState.key);
   dragState = null;
   document.removeEventListener('mousemove', onFaderDrag);
   document.removeEventListener('mouseup', endFaderDrag);
